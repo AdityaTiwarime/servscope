@@ -16,7 +16,7 @@ processors:
     timeout: 2s
 
 exporters:
-  otlphttp/servscope:
+  otlp_http/servscope:
     traces_endpoint: ${env:SERVSCOPE_INGEST_URL}/v1/traces
     headers:
       Authorization: Bearer ${env:SERVSCOPE_INGEST_TOKEN}
@@ -40,4 +40,4 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlphttp/servscope]
+      exporters: [otlp_http/servscope]

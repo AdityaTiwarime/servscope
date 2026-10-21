@@ -64,18 +64,69 @@ services:
     networks: [demo, servscope]
     restart: unless-stopped
 
+  # The demo shop. Only the gateway is published; the other three are reachable only inside
+  # the demo network, the way internal services usually are.
   gateway:
     <<: *app
     command: ["python", "-m", "demo_services.gateway"]
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
+      ORDERS_URL: http://orders:8081
       PORT: "8080"
     ports:
       - "127.0.0.1:8080:8080"
     networks: [demo]
-    depends_on: [collector]
+    depends_on:
+      collector: { condition: service_started }
+      orders: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  orders:
+    <<: *app
+    command: ["python", "-m", "demo_services.orders"]
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
+      INVENTORY_URL: http://inventory:8082
+      PAYMENTS_URL: http://payments:8083
+      PORT: "8081"
+    networks: [demo]
+    depends_on:
+      inventory: { condition: service_healthy }
+      payments: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  inventory:
+    <<: *app
+    command: ["python", "-m", "demo_services.inventory"]
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
+      PORT: "8082"
+    networks: [demo]
+    depends_on: [collector]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  payments:
+    <<: *app
+    command: ["python", "-m", "demo_services.payments"]
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
+      PORT: "8083"
+    networks: [demo]
+    depends_on: [collector]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/healthz')"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -89,6 +140,7 @@ services:
       - python
       - scripts/smoke.py
       - --gateway=http://gateway:8080
+      - --collector=http://collector:4318
       - --db=postgresql://servscope:${SERVSCOPE_DB_PASSWORD}@postgres:5432/servscope
     networks: [demo, servscope]
     depends_on:
