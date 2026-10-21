@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: lint, types, tests
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: servscope
+          POSTGRES_PASSWORD: servscope
+          POSTGRES_DB: servscope_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U servscope" --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.32"
+      - run: uv sync --frozen --python 3.12
+      - name: ruff lint
+        run: uv run ruff check .
+      - name: ruff format
+        run: uv run ruff format --check .
+      - name: mypy
+        run: uv run mypy
+      - name: pytest
+        run: uv run pytest -v
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://servscope:servscope@localhost:5432/servscope_test
+
+  stack:
+    name: docker compose end-to-end
+    needs: checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: create .env from the example
+        run: |
+          cp .env.example .env
+          sed -i "s/^SERVSCOPE_INGEST_TOKEN=.*/SERVSCOPE_INGEST_TOKEN=$(openssl rand -hex 24)/" .env
+          sed -i "s/^SERVSCOPE_DB_PASSWORD=.*/SERVSCOPE_DB_PASSWORD=$(openssl rand -hex 16)/" .env
+      - name: start the stack
+        run: docker compose up --build --detach
+      - name: smoke test (checkout -> trace in PostgreSQL)
+        # `run` honours depends_on, so this waits until gateway and ServScope are healthy.
+        run: timeout 300 docker compose run --rm smoke
+      - name: logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+      - name: stop
+        if: always()
+        run: docker compose down --volumes

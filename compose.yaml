@@ -1,0 +1,103 @@
+# The whole stack: `docker compose up --build`   (smoke test: `docker compose run --rm smoke`)
+#
+# Two networks mirror the two trust zones in the design: the demo app can reach only the
+# Collector, and only the Collector can reach ServScope. PostgreSQL has no published port.
+
+name: servscope
+
+x-app: &app
+  build:
+    context: .
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: servscope
+      POSTGRES_DB: servscope
+      POSTGRES_PASSWORD: ${SERVSCOPE_DB_PASSWORD:?copy .env.example to .env first}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [servscope]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U servscope -d servscope"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      SERVSCOPE_DATABASE_URL: postgresql+asyncpg://servscope:${SERVSCOPE_DB_PASSWORD}@postgres:5432/servscope
+    networks: [servscope]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  servscope:
+    <<: *app
+    environment:
+      SERVSCOPE_ENV: ${SERVSCOPE_ENV:-demo}
+      SERVSCOPE_DATABASE_URL: postgresql+asyncpg://servscope:${SERVSCOPE_DB_PASSWORD}@postgres:5432/servscope
+      SERVSCOPE_INGEST_TOKEN: ${SERVSCOPE_INGEST_TOKEN:?copy .env.example to .env first}
+    ports:
+      - "127.0.0.1:8000:8000"   # localhost only, never the whole network
+    networks: [servscope]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.149.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/collector.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      SERVSCOPE_INGEST_URL: http://servscope:8000
+      SERVSCOPE_INGEST_TOKEN: ${SERVSCOPE_INGEST_TOKEN}
+    networks: [demo, servscope]
+    restart: unless-stopped
+
+  gateway:
+    <<: *app
+    command: ["python", "-m", "demo_services.gateway"]
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks: [demo]
+    depends_on: [collector]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # One-off end-to-end check, on both networks so it can reach the gateway and the database.
+  smoke:
+    <<: *app
+    restart: "no"
+    profiles: [test]
+    command:
+      - python
+      - scripts/smoke.py
+      - --gateway=http://gateway:8080
+      - --db=postgresql://servscope:${SERVSCOPE_DB_PASSWORD}@postgres:5432/servscope
+    networks: [demo, servscope]
+    depends_on:
+      gateway: { condition: service_healthy }
+      servscope: { condition: service_healthy }
+
+networks:
+  demo:
+  servscope:
+
+volumes:
+  pgdata:

@@ -1,0 +1,43 @@
+# OpenTelemetry Collector: receives from the demo services, forwards to ServScope.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Refuse new data before the Collector itself runs out of memory.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  batch:
+    send_batch_size: 512
+    timeout: 2s
+
+exporters:
+  otlphttp/servscope:
+    traces_endpoint: ${env:SERVSCOPE_INGEST_URL}/v1/traces
+    headers:
+      Authorization: Bearer ${env:SERVSCOPE_INGEST_TOKEN}
+    compression: gzip
+    timeout: 10s
+    # When ServScope answers 503 or is down, keep the batch and try again.
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
+    sending_queue:
+      enabled: true
+      queue_size: 1000
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/servscope]
