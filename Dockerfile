@@ -1,4 +1,12 @@
-# One image for the ServScope API and the demo services; the compose command picks which runs.
+# Stage 1: build the dashboard (static files only; Node is not in the final image).
+FROM node:22-slim AS ui
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY ui/ ./
+RUN npm run build
+
+# Stage 2: one Python image for the ServScope API and the demo services; compose picks which runs.
 FROM python:3.12-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /usr/local/bin/uv
@@ -13,6 +21,7 @@ COPY migrations ./migrations
 COPY alembic.ini ./
 COPY scripts ./scripts
 RUN uv sync --frozen --no-dev
+COPY --from=ui /ui/dist ./ui
 
 RUN useradd --system --uid 10001 app
 USER app

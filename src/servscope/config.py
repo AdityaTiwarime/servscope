@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -32,6 +33,9 @@ class Settings(BaseSettings):
     retention_interval_seconds: float = Field(default=60, gt=0)
     retention_batch_size: int = Field(default=5000, gt=0)
     retention_enabled: bool = True
+
+    # The built dashboard (ui/dist). Unset: ServScope serves only the API.
+    ui_dir: Path | None = None
 
 
 @lru_cache

@@ -297,3 +297,45 @@ async def test_no_card_token_ever_appears_in_logs(shop: Shop) -> None:
     for line in lines:
         assert "tok_demo" not in str(line.body)
         assert "tok_demo" not in str(dict(line.attributes or {}))
+
+
+def client_span_to(spans: list[ReadableSpan], callee: str) -> ReadableSpan:
+    [s] = [
+        s
+        for s in spans
+        if s.kind == SpanKind.CLIENT
+        and (s.attributes or {}).get("server.address") == callee
+        and (s.attributes or {}).get("http.request.method") == "POST"
+    ]
+    return s
+
+
+async def test_a_timed_out_call_is_an_error_on_the_callers_side() -> None:
+    # The callee may still answer 201 later; the caller's span must already say "timeout".
+    s = await build_shop(payment_timeout=0.2)
+    s.payments.state.delay_seconds = 1.0
+    await s.client.post("/checkout", json=TEA_AND_MUG)
+    await s.client.aclose()
+    call = client_span_to(list(s.spans.get_finished_spans()), "payments")
+    assert call.status.status_code == StatusCode.ERROR
+    assert (call.attributes or {})["error.type"] == "timeout"
+    assert any(e.name == "exception" for e in call.events)
+
+
+async def test_a_declined_card_is_an_answer_not_a_broken_call(shop: Shop) -> None:
+    await shop.client.post("/checkout", json={**TEA_AND_MUG, "card_token": "tok_demo_declined"})
+    call = client_span_to(list(shop.spans.get_finished_spans()), "payments")
+    assert call.status.status_code != StatusCode.ERROR
+    assert (call.attributes or {})["http.response.status_code"] == 402
+
+
+async def test_unreachable_service_is_an_error_with_its_cause() -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    s = await build_shop(inventory_transport=httpx.MockTransport(refuse))
+    await s.client.post("/checkout", json=TEA_AND_MUG)
+    await s.client.aclose()
+    call = client_span_to(list(s.spans.get_finished_spans()), "inventory")
+    assert call.status.status_code == StatusCode.ERROR
+    assert (call.attributes or {})["error.type"] == "ConnectError"

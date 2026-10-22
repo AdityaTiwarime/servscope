@@ -126,10 +126,37 @@ def test_depths_and_own_time() -> None:
     assert a.nodes["pay"].self_ns == 65 * MS
 
 
-def test_critical_path_follows_what_finished_last() -> None:
+def test_critical_path_includes_calls_made_one_after_another() -> None:
+    # Orders reserves stock (10-20) and THEN charges (25-90): the request waited on both.
     a = analyse(checkout_trace())
-    assert a.critical_path == ["gw", "od", "pay"]
-    assert not a.nodes["inv"].on_critical_path
+    assert set(a.critical_path) == {"gw", "od", "pay", "inv"}
+
+
+def test_parallel_work_that_finished_early_is_off_the_critical_path() -> None:
+    #  parent 0 ............................. 100
+    #  slow     10 ...................... 90         <- what parent waited for
+    #  quick      20 ... 30                         (ran inside slow's time: not waited on)
+    #  setup  2 .. 8                               (before slow started: waited on)
+    spans = [
+        ("p", None, 0, 100 * MS),
+        ("slow", "p", 10 * MS, 80 * MS),
+        ("quick", "p", 20 * MS, 10 * MS),
+        ("setup", "p", 2 * MS, 6 * MS),
+    ]
+    a = analyse(spans)
+    assert set(a.critical_path) == {"p", "slow", "setup"}
+    assert not a.nodes["quick"].on_critical_path
+
+
+def test_child_that_outlives_its_caller_is_counted_only_while_waited_on() -> None:
+    # The payments timeout: orders' call gives up at 2 s, payments itself runs to 3 s.
+    spans = [
+        ("orders", None, 0, 2000 * MS),
+        ("call", "orders", 10 * MS, 1990 * MS),
+        ("payments", "call", 11 * MS, 3000 * MS),
+    ]
+    a = analyse(spans)
+    assert a.critical_path == ["orders", "call", "payments"]
 
 
 def test_slowest_span_is_the_one_with_most_own_time() -> None:

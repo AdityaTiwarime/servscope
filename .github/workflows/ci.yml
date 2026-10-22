@@ -39,9 +39,28 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://servscope:servscope@localhost:5432/servscope_test
 
+  ui:
+    name: dashboard lint, types, tests, build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
   stack:
     name: docker compose end-to-end
-    needs: checks
+    needs: [checks, ui]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -55,6 +74,20 @@ jobs:
       - name: smoke test (checkout -> trace in PostgreSQL)
         # `run` honours depends_on, so this waits until gateway and ServScope are healthy.
         run: timeout 300 docker compose run --rm smoke
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: dashboard end-to-end (Playwright, real browser, real stack)
+        working-directory: ui
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test
+        env:
+          SERVSCOPE_URL: http://localhost:8000
+          GATEWAY_URL: http://localhost:8080
       - name: logs on failure
         if: failure()
         run: docker compose logs --no-color --tail 200

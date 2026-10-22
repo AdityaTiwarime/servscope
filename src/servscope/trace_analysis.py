@@ -77,15 +77,31 @@ def analyse(spans: list[tuple[str, str | None, int, int]]) -> Analysis:
             child.starts_before_parent = child.start_ns < node.start_ns
             stack.append((child, depth + 1))
 
-    # Critical path: from the main root, keep following the child that finished last,
-    # because that child is what the parent was still waiting for at the end.
+    # Critical path: what the request was actually waiting on, found by walking backwards.
+    # Start at the end of the main root. The child that finished last (up to that moment) is
+    # what the span was waiting for; it is on the path. Jump to when that child started and
+    # repeat with the remaining children, so calls made one after another (reserve stock,
+    # then charge, then release) are all on the path, not just the last one. A child that
+    # outlives its parent (still running after the caller gave up) only counts up to the
+    # moment the parent stopped waiting.
     path: list[str] = []
     if roots:
-        current: SpanNode | None = max(roots, key=lambda n: n.duration_ns)
-        while current is not None:
-            current.on_critical_path = True
-            path.append(current.span_id)
-            current = max(current.children, key=lambda c: c.end_ns, default=None)
+        main = max(roots, key=lambda n: n.duration_ns)
+        todo: list[tuple[SpanNode, int]] = [(main, main.end_ns)]
+        while todo:
+            span, until = todo.pop()
+            span.on_critical_path = True
+            path.append(span.span_id)
+            t = min(span.end_ns, until)
+            remaining = list(span.children)
+            while True:
+                waiting_on = [c for c in remaining if c.start_ns < t]
+                if not waiting_on:
+                    break
+                last = max(waiting_on, key=lambda c: min(c.end_ns, t))
+                remaining.remove(last)
+                todo.append((last, t))
+                t = last.start_ns
 
     slowest = max(nodes.values(), key=lambda n: n.self_ns, default=None)
     return Analysis(nodes, roots, path, slowest.span_id if slowest else None)

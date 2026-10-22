@@ -269,7 +269,7 @@ async def service_metrics(
 
 _DEPENDENCIES = text("""
     SELECT p.service AS caller, c.service AS callee, count(*) AS calls,
-           count(*) FILTER (WHERE c.status_code = 2) AS errors
+           count(*) FILTER (WHERE c.status_code = 2 OR p.status_code = 2) AS errors
     FROM spans c
     JOIN spans p ON p.trace_id = c.trace_id AND p.span_id = c.parent_span_id
     WHERE c.kind = 2 AND c.start_time >= :start AND c.start_time < :end
@@ -282,7 +282,10 @@ _DEPENDENCIES = text("""
 async def dependencies(request: Request, start: From = None, end: To = None) -> dict[str, Any]:
     """Who calls whom, built from the spans themselves: a server span whose parent belongs to
     another service is one call between them. Computed at query time, so it is always right
-    for the chosen window, whichever batch each span arrived in."""
+    for the chosen window, whichever batch each span arrived in.
+
+    A call counts as failed if EITHER side says so: a callee that answered too late can
+    report success while the caller had already given up with a timeout."""
     w = window(start, end, MAX_RAW_WINDOW)
     async with _conn(request) as conn:
         rows = await conn.execute(_DEPENDENCIES, {"start": w.start, "end": w.end})
@@ -359,7 +362,10 @@ async def list_traces(
             {
                 "trace_id": row.trace_id,
                 "start_time": s.first_start,
-                "duration_ms": round((s.last_end_ns - s.first_start_ns) / 1e6, 3),
+                # What the caller waited (the root span), not how long the last span ran:
+                # a callee still working after its caller gave up didn't make anyone wait.
+                "duration_ms": round(s.root_duration_ns / 1e6, 3),
+                "trace_duration_ms": round((s.last_end_ns - s.first_start_ns) / 1e6, 3),
                 "root_service": s.root_service,
                 "root_operation": s.root_operation,
                 "http_status": s.root_http_status,
@@ -381,7 +387,8 @@ _TRACE_SUMMARIES = text("""
         FROM spans WHERE trace_id = ANY(CAST(:ids AS varchar[])) GROUP BY trace_id
     ), root AS (
         SELECT DISTINCT ON (trace_id) trace_id, service AS root_service,
-               operation AS root_operation, http_status AS root_http_status
+               operation AS root_operation, http_status AS root_http_status,
+               duration_ns AS root_duration_ns
         FROM spans WHERE trace_id = ANY(CAST(:ids AS varchar[]))
         ORDER BY trace_id, start_ns, duration_ns DESC
     )

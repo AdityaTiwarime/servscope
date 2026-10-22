@@ -42,6 +42,7 @@ services:
       SERVSCOPE_ENV: ${SERVSCOPE_ENV:-demo}
       SERVSCOPE_DATABASE_URL: postgresql+asyncpg://servscope:${SERVSCOPE_DB_PASSWORD}@postgres:5432/servscope
       SERVSCOPE_INGEST_TOKEN: ${SERVSCOPE_INGEST_TOKEN:?copy .env.example to .env first}
+      SERVSCOPE_UI_DIR: /app/ui   # the dashboard, on the same address as the API
     ports:
       - "127.0.0.1:8000:8000"   # localhost only, never the whole network
     networks: [servscope]

@@ -8,10 +8,11 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import text
 
 from . import __version__, retention
@@ -24,6 +25,39 @@ from .query import router as query_router
 from .stats import Stats
 
 PROBLEM = "application/problem+json"
+
+
+# The dashboard may load scripts, styles, fonts and data only from ServScope itself, and may
+# not be framed by another site. 'unsafe-inline' for styles covers React's style attributes;
+# scripts get no such exception.
+UI_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def mount_ui(app: FastAPI, ui_dir: Path) -> None:
+    """Serve the built dashboard. Real files (hashed assets) are sent as they are; any other
+    path gets index.html so the dashboard's own router can show /traces/<id> and the like."""
+    root = ui_dir.resolve()
+    index = root / "index.html"
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def ui(path: str) -> Response:
+        if path.startswith(("api/", "v1/")):  # an unknown API route is a 404, not the page
+            return problem(404, "Not found")
+        candidate = (root / path).resolve()
+        # resolve() collapses any ../ first, so this check stops path traversal.
+        if path and candidate.is_file() and candidate.is_relative_to(root):
+            immutable = candidate.parent.name == "assets"  # Vite puts a hash in these names
+            cache = "public, max-age=31536000, immutable" if immutable else "no-cache"
+            return FileResponse(candidate, headers={**UI_HEADERS, "Cache-Control": cache})
+        return FileResponse(index, headers={**UI_HEADERS, "Cache-Control": "no-cache"})
 
 
 def problem(status: int, title: str, detail: str = "") -> JSONResponse:
@@ -115,6 +149,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(ingest_router)
     app.include_router(query_router)
+    if settings.ui_dir is not None and (settings.ui_dir / "index.html").is_file():
+        mount_ui(app, settings.ui_dir)  # last, so it never shadows an API route
     return app
 
 

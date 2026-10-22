@@ -208,6 +208,28 @@ async def test_dependency_map_comes_from_real_calls(make_client: Any) -> None:
     assert edges[("gateway", "orders")]["errors"] == 0
 
 
+async def test_dependency_errors_count_the_callers_view(make_client: Any) -> None:
+    # Payments answered 201, but too late: only orders' client span knows the call failed.
+    tid, od, od_call, pay = os.urandom(16), os.urandom(8), os.urandom(8), os.urandom(8)
+    async with make_client() as client:
+        await send(
+            client,
+            make_export(
+                [
+                    make_span(trace_id=tid, span_id=od),
+                    make_span(trace_id=tid, span_id=od_call, parent=od, kind=CLIENT, error=True),
+                ],
+                "orders",
+            ),
+        )
+        await send(
+            client, make_export([make_span(trace_id=tid, span_id=pay, parent=od_call)], "payments")
+        )
+        r = await client.get("/api/dependencies")
+    [edge] = r.json()["edges"]
+    assert (edge["caller"], edge["callee"], edge["errors"]) == ("orders", "payments", 1)
+
+
 # --- traces ----------------------------------------------------------------------------
 
 
@@ -270,7 +292,8 @@ async def test_trace_detail_explains_where_the_time_went(make_client: Any) -> No
     body = r.json()
     assert body["span_count"] == 4 and body["error_count"] == 1
     assert body["duration_ns"] == 100 * MS
-    assert body["critical_path"] == [gw.hex(), od.hex(), pay.hex()]
+    # Reserve stock, then charge: the request waited on both, one after the other.
+    assert set(body["critical_path"]) == {gw.hex(), od.hex(), pay.hex(), inv.hex()}
     assert body["slowest_span_id"] == pay.hex()
     by_id = {s["span_id"]: s for s in body["spans"]}
     assert [s["span_id"] for s in body["spans"]] == [gw.hex(), od.hex(), inv.hex(), pay.hex()]
@@ -279,6 +302,44 @@ async def test_trace_detail_explains_where_the_time_went(make_client: Any) -> No
     assert by_id[pay.hex()]["error_type"] == "payments_timeout"
     assert by_id[pay.hex()]["log_count"] == 2
     assert isinstance(body["start_ns"], str)  # epoch nanoseconds exceed a JS number
+
+
+async def test_trace_list_reports_what_the_caller_waited(make_client: Any) -> None:
+    # Orders gives up at 2 s; payments keeps going to 3 s. The customer waited 2 s.
+    tid, root, call = os.urandom(16), os.urandom(8), os.urandom(8)
+    t0 = now_ns()
+    async with make_client() as client:
+        await send(
+            client,
+            make_export(
+                [
+                    make_span(trace_id=tid, span_id=root, start_ns=t0, duration_ns=2000 * MS),
+                    make_span(
+                        trace_id=tid,
+                        span_id=call,
+                        parent=root,
+                        start_ns=t0 + 10 * MS,
+                        duration_ns=1990 * MS,
+                        kind=CLIENT,
+                    ),
+                ],
+                "orders",
+            ),
+        )
+        await send(
+            client,
+            make_export(
+                [
+                    make_span(
+                        trace_id=tid, parent=call, start_ns=t0 + 11 * MS, duration_ns=3000 * MS
+                    )
+                ],
+                "payments",
+            ),
+        )
+        [t] = (await client.get("/api/traces")).json()["traces"]
+    assert t["duration_ms"] == 2000
+    assert t["trace_duration_ms"] == 3011
 
 
 async def test_trace_list_filters(make_client: Any) -> None:

@@ -13,17 +13,19 @@ trace_id and span_id. That is what lets ServScope jump from a trace to its logs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 from fastapi import FastAPI
+from opentelemetry import propagate
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
@@ -34,6 +36,7 @@ from opentelemetry.sdk._logs.export import (
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExporter
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 BACKSTOP_TIMEOUT = httpx.Timeout(10.0)
 
@@ -97,16 +100,70 @@ def setup_telemetry(
     return tracer_provider, logger
 
 
-def traced_client(
-    provider: TracerProvider,
-    base_url: str,
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> httpx.AsyncClient:
-    """An HTTP client whose calls become client spans and carry the `traceparent` header.
+class Downstream:
+    """Calls one downstream service. Each call is a CLIENT span that carries `traceparent`.
 
-    Callers set the real deadline with asyncio.timeout() around each call, which also works
-    with the in-process transports tests use. The 10 s network timeout is only a backstop, so
-    a call someone forgets to wrap still can't hang for ever."""
-    client = httpx.AsyncClient(base_url=base_url, transport=transport, timeout=BACKSTOP_TIMEOUT)
-    HTTPXClientInstrumentor.instrument_client(client, tracer_provider=provider)
-    return client
+    Why not the generic httpx instrumentation: when a call is cut off by asyncio.timeout,
+    that instrumentation ends its span without marking an error (cancellation is not an
+    ordinary exception), so a timeout looked like success from the caller's side, which is
+    exactly the failure an observability tool must show. Here the span is ours, so:
+
+    - a timeout or a connection failure is an error, with `error.type`;
+    - a 5xx answer is an error;
+    - a 4xx answer is NOT: a declined card or an out-of-stock reply is the other service
+      working correctly. (The OpenTelemetry convention suggests marking client 4xx as
+      errors; this demo deliberately keeps "refused" apart from "broken".)
+    """
+
+    def __init__(
+        self,
+        provider: TracerProvider,
+        name: str,
+        base_url: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
+        self.name = name
+        self.tracer = provider.get_tracer("demo.downstream")
+        # The 10 s network timeout is only a backstop; each call passes its real deadline.
+        self.client = httpx.AsyncClient(
+            base_url=base_url, transport=transport, timeout=BACKSTOP_TIMEOUT
+        )
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        deadline_s: float,
+        headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        with self.tracer.start_as_current_span(
+            f"{method} {self.name}",
+            kind=SpanKind.CLIENT,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            span.set_attribute("http.request.method", method)
+            span.set_attribute("server.address", self.name)
+            span.set_attribute("url.path", path)
+            outgoing = dict(headers or {})
+            propagate.inject(outgoing)  # traceparent of THIS span, so the callee is its child
+            try:
+                async with asyncio.timeout(deadline_s):
+                    response = await self.client.request(method, path, headers=outgoing, **kwargs)
+            except TimeoutError as exc:
+                span.record_exception(exc)
+                span.set_attribute("error.type", "timeout")
+                span.set_status(Status(StatusCode.ERROR, f"no answer within {deadline_s}s"))
+                raise
+            except httpx.HTTPError as exc:
+                span.record_exception(exc)
+                span.set_attribute("error.type", type(exc).__name__)
+                span.set_status(Status(StatusCode.ERROR, f"{self.name} unreachable"))
+                raise
+            span.set_attribute("http.response.status_code", response.status_code)
+            if response.status_code >= 500:
+                span.set_attribute("error.type", str(response.status_code))
+                span.set_status(Status(StatusCode.ERROR))
+            return response

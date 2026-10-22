@@ -6,7 +6,6 @@ a failed order never keeps stock locked away.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 
@@ -18,7 +17,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from .schemas import Order, OrderRequest, Problem
-from .telemetry import Exporters, setup_telemetry, traced_client
+from .telemetry import Downstream, Exporters, setup_telemetry
 
 PRICES = {"tea": 12_000, "mug": 34_900, "beans": 54_000}
 DEFAULT_PRICE = 10_000
@@ -40,13 +39,14 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="Demo orders", docs_url=None, redoc_url=None)
     provider, log = setup_telemetry(app, "orders", exporters)
-    inventory = traced_client(provider, inventory_url, inventory_transport)
-    payments = traced_client(provider, payments_url, payments_transport)
+    inventory = Downstream(provider, "inventory", inventory_url, inventory_transport)
+    payments = Downstream(provider, "payments", payments_url, payments_transport)
 
     async def release(reservation_id: str) -> None:
         try:
-            async with asyncio.timeout(INVENTORY_TIMEOUT):
-                await inventory.delete(f"/reservations/{reservation_id}")
+            await inventory.request(
+                "DELETE", f"/reservations/{reservation_id}", deadline_s=INVENTORY_TIMEOUT
+            )
         except (TimeoutError, httpx.HTTPError):
             # Logged, not raised: the customer already has their answer. A periodic sweep of
             # stale reservations would clean this up; it is out of scope for the demo.
@@ -69,10 +69,12 @@ def create_app(
 
         # 1. Reserve stock.
         try:
-            async with asyncio.timeout(INVENTORY_TIMEOUT):
-                r = await inventory.post(
-                    "/reservations", json={"order_id": order_id, "items": items}
-                )
+            r = await inventory.request(
+                "POST",
+                "/reservations",
+                deadline_s=INVENTORY_TIMEOUT,
+                json={"order_id": order_id, "items": items},
+            )
         except (TimeoutError, httpx.HTTPError) as exc:
             span.record_exception(exc)
             span.set_attribute("error.type", "inventory_unavailable")
@@ -89,10 +91,13 @@ def create_app(
         #    call can never charge the customer twice.
         charge = {"order_id": order_id, "amount_paise": total, "card_token": body.card_token}
         try:
-            async with asyncio.timeout(payment_timeout):
-                p = await payments.post(
-                    "/charges", json=charge, headers={"Idempotency-Key": order_id}
-                )
+            p = await payments.request(
+                "POST",
+                "/charges",
+                deadline_s=payment_timeout,
+                json=charge,
+                headers={"Idempotency-Key": order_id},
+            )
         except TimeoutError as exc:
             # error.type is the OpenTelemetry convention for "why did this fail"; the span
             # status itself is set to ERROR by the instrumentation because we answer 504.

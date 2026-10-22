@@ -5,3 +5,7 @@
 .mypy_cache
 .ruff_cache
 .env
+ui/node_modules
+ui/dist
+ui/test-results
+ui/playwright-report

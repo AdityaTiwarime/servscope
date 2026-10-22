@@ -6,7 +6,6 @@ meaning (409 out of stock, 402 declined); anything unexpected becomes a 502 or 5
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 import httpx
@@ -15,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from .schemas import Checkout, Order, Problem
-from .telemetry import Exporters, setup_telemetry, traced_client
+from .telemetry import Downstream, Exporters, setup_telemetry
 
 # Longer than orders' own worst case (1 s inventory + 2 s payments + 1 s release), so the
 # gateway hears orders' specific error instead of timing out first.
@@ -30,7 +29,7 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="Demo gateway", docs_url=None, redoc_url=None)
     provider, log = setup_telemetry(app, "gateway", exporters)
-    orders = traced_client(provider, orders_url, orders_transport)
+    orders = Downstream(provider, "orders", orders_url, orders_transport)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -39,8 +38,9 @@ def create_app(
     @app.post("/checkout", status_code=201, response_model=Order)
     async def checkout(body: Checkout) -> Order | JSONResponse:
         try:
-            async with asyncio.timeout(ORDERS_TIMEOUT):
-                r = await orders.post("/orders", json=body.model_dump())
+            r = await orders.request(
+                "POST", "/orders", deadline_s=ORDERS_TIMEOUT, json=body.model_dump()
+            )
         except TimeoutError:
             log.error("checkout failed: orders did not answer within %ss", ORDERS_TIMEOUT)
             return JSONResponse(Problem(title="Orders timed out", status=504).model_dump(), 504)
