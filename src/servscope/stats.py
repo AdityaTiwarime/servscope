@@ -20,6 +20,10 @@ HELP = {
     "servscope_logs_rejected_total": "Invalid log records skipped",
     "servscope_ingest_refused_total": "Export requests answered 503 (busy or storage down)",
     "servscope_retention_deleted_total": "Rows removed by the retention job",
+    "servscope_alert_evaluations_total": "Completed alert evaluation passes",
+    "servscope_alert_evaluation_failures_total": "Alert passes that failed (e.g. database down)",
+    "servscope_incidents_opened_total": "Incidents opened by the alert evaluator",
+    "servscope_incidents_resolved_total": "Incidents resolved",
 }
 
 

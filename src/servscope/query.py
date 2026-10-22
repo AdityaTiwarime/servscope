@@ -65,9 +65,12 @@ Name = Annotated[str | None, Query(max_length=256)]
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, title: str, detail: str = ""):
+    def __init__(
+        self, status: int, title: str, detail: str = "", headers: dict[str, str] | None = None
+    ):
         super().__init__(title)
         self.status, self.title, self.detail = status, title, detail
+        self.headers = headers or {}
 
 
 @dataclass(frozen=True)
@@ -145,7 +148,7 @@ _LAST_SEEN = text(
 )
 
 
-async def _totals(conn: AsyncConnection, w: Window) -> dict[str, dict[str, Any]]:
+async def service_totals(conn: AsyncConnection, w: Window) -> dict[str, dict[str, Any]]:
     params = {"start": w.start, "end": w.end}
     out: dict[str, dict[str, Any]] = {}
     for row in await conn.execute(_SERVICE_TOTALS, params):
@@ -176,8 +179,8 @@ async def services(request: Request, start: From = None, end: To = None) -> dict
     w = window(start, end, MAX_METRIC_WINDOW)
     now = datetime.now(UTC)
     async with _conn(request) as conn:
-        in_window = await _totals(conn, w)
-        recent = await _totals(conn, Window(now - HEALTH_WINDOW, now + timedelta(minutes=1)))
+        in_window = await service_totals(conn, w)
+        recent = await service_totals(conn, Window(now - HEALTH_WINDOW, now + timedelta(minutes=1)))
         last_seen = {r.service: r.last_seen for r in await conn.execute(_LAST_SEEN)}
 
     seconds = (w.end - w.start).total_seconds()

@@ -7,7 +7,7 @@ const API = process.env.SERVSCOPE_URL ?? "http://localhost:8000";
 const randomHex = (bytes: number) =>
   Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
 
-test("a declined checkout can be followed from the trace list to the log line that explains it", async ({ page, request }) => {
+test("a declined checkout can be found by its ID and followed to the log line that explains it", async ({ page, request }) => {
   // 1. A customer's card is declined. We pick the trace ID so we can find it again.
   const traceId = randomHex(16);
   const checkout = await request.post(`${GATEWAY}/checkout`, {
@@ -31,9 +31,11 @@ test("a declined checkout can be followed from the trace list to the log line th
     .poll(async () => (await (await request.get(`${API}/api/logs?trace_id=${traceId}`)).json()).logs.length, { timeout: 30_000 })
     .toBeGreaterThan(1);
 
-  // 3. Find it in the trace list, filtered to payments.
-  await page.goto("/traces?service=payments");
-  await page.locator(`a[data-trace-id="${traceId}"]`).click();
+  // 3. Find it by its ID, the way you would from a customer's error report. (Not by
+  //    scrolling the trace list: the demo's steady traffic keeps pushing new traces on top.)
+  await page.goto("/");
+  await page.getByRole("searchbox", { name: /Find a trace by its 32-character ID/ }).fill(traceId);
+  await page.keyboard.press("Enter");
 
   // 4. The waterfall shows the whole request across four services.
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("gateway POST /checkout");

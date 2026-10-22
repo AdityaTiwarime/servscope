@@ -3,6 +3,7 @@ import type { Percentile } from "../api/types";
 /** 0.4 ms, 42 ms, 1.23 s, 2 min 5 s: always the unit a person reads fastest. */
 export function formatMs(ms: number): string {
   if (!Number.isFinite(ms)) return "–";
+  if (ms === 0) return "0 ms";
   if (ms < 1) return `${ms.toFixed(2)} ms`;
   if (ms < 10) return `${ms.toFixed(1)} ms`;
   if (ms < 1000) return `${Math.round(ms)} ms`;

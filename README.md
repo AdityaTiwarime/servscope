@@ -6,21 +6,20 @@ ServScope collects traces, metrics and logs from a small multi-service app (a de
 a gateway, orders, payments and inventory) and helps a developer find out why requests are
 slow or failing.
 
-> **Status: Milestone 4 of 8.** The dashboard is live: service health, a service map built
-> from real calls, failing requests, a trace waterfall that says where the time went, and
-> the log lines of any step one click away. Alerts and the failure-scenario switch arrive in
-> Milestone 5.
+> **Status: Milestone 5 of 8.** Alerts and incidents work end to end: break the demo shop
+> from the Demo scenarios screen, and ServScope raises an alert, links the failing requests,
+> and resolves the incident by itself once the fix has held. A scripted version of that
+> investigation runs in CI on every push.
 
-![Overview during a payments slowdown](docs/overview.png)
+![Overview during an incident](docs/overview.png)
 
-*Overview during a local run with payments slowed to 3 s: orders gives up at 2 s, so 42% of
-checkouts fail and the orders → payments call is marked as failing.*
+*A payments timeout, live: two alerts on the gateway (errors and latency), grouped as one
+problem, above the usual health view.*
 
-![Trace view](docs/trace.png)
+![Incident page](docs/incident.png)
 
-*One of those checkouts. The summary names the step that held the customer up, the dashed
-line marks when the customer got the 504, and the striped bar is payments still working
-after nobody was waiting.*
+*The same incident after it resolved: what the rule saw, with the incident period shaded,
+the timeline, and the traces captured when it fired.*
 
 ## Run it
 
@@ -33,7 +32,8 @@ cp .env.example .env          # then change the two secrets in .env
 docker compose up --build
 ```
 
-In a second terminal, place some orders:
+The stack includes a traffic generator (2 checkouts a second, `TRAFFIC_RPS` in `.env`), so
+the dashboard fills up by itself. To place orders by hand, in a second terminal:
 
 ```bash
 # a normal order -> 201
@@ -61,6 +61,64 @@ curl -s localhost:8000/metrics                           # ServScope's own count
 ```
 
 Full parameters are on `localhost:8000/docs` in demo mode.
+
+## Reproduce an incident
+
+Failure scenarios are off by default. To turn them on for a local demo, set these in `.env`
+and run `docker compose up --build` again:
+
+```bash
+SERVSCOPE_ENV=demo
+SERVSCOPE_FAILURE_INJECTION=true
+SERVSCOPE_ADMIN_TOKEN=<openssl rand -hex 24>
+SERVSCOPE_FAULT_TOKEN=<openssl rand -hex 24>
+```
+
+**In the dashboard:** open *Demo scenarios*, click *Unlock admin* and paste the admin token,
+start **Payments timeout**, then watch *Overview* and *Alerts*. When "Checkout errors"
+fires, *Investigate* opens the incident; *Open a failing trace* shows orders giving up on
+payments after 2 s, and the span's log lines say so. Click *Stop now* and the incident
+resolves by itself once the error rate has been back under 10% for 60 s.
+
+**Scripted** (this is what CI runs):
+
+```bash
+docker compose run --rm incident-demo
+# another scenario:
+docker compose run --rm incident-demo python scripts/incident_demo.py \
+    --api http://servscope:8000 --scenario payments_slow
+```
+
+It checks the shop is healthy, starts the scenario, waits for the alert, follows the
+incident to a failing trace and its logs, stops the scenario, waits for the incident to
+resolve, prints the timeline, and fails if any step didn't happen. Measured on one local run
+of each scenario (one machine, 2 checkouts/s, alerts every 15 s; your times will differ by
+up to one evaluation cycle):
+
+| Scenario | Alert that fired | Fired after start | Resolved after stop |
+| --- | --- | --- | --- |
+| Payments timeout | Checkout errors | 72 s | 165 s |
+| Slow payments | Checkout latency (p95) | 69 s | 211 s |
+| Payments returns errors | Checkout errors | 69 s | 150 s |
+| Inventory unreachable | Service unavailable (inventory) | 162 s | 45 s |
+
+Each run passed every check: one incident for the outage, linked traces showing the cause,
+log lines linked to them, and recovery without anyone closing the incident by hand. During
+"inventory unreachable", payments (starved of calls, not broken) raised nothing.
+
+Why it takes about a minute to fire: the rule only looks at data at least 30 s old (spans
+still in transit would look like silence), then the condition must hold for 30 s (`for`),
+then the next 15 s evaluation notices. "Unavailable" needs a whole 2-minute window of
+silence first, so it takes longer. Resolving takes longer on purpose: the failing
+minutes must leave the 2-minute window, and then the rule must stay clear for 60 s
+(`recover`), so one good minute doesn't close an incident that is still happening.
+
+| Scenario | What it does | What should fire |
+| --- | --- | --- |
+| Slow payments | charges take 1.5 s longer | Checkout latency (p95) |
+| Payments timeout | charges take 3 s; orders gives up at 2 s | Checkout errors (and latency) |
+| Payments returns errors | 30% of charges answer 503 | Checkout errors |
+| Inventory unreachable | orders' connections to inventory are refused | Service unavailable (inventory) and Checkout errors |
 
 Stop with `docker compose down` (add `--volumes` to delete the stored data).
 
@@ -133,8 +191,10 @@ crosses services only through the W3C `traceparent` header.
 - **Paging uses cursors, not page numbers**, so new data arriving between two pages can't
   cause skipped or repeated results. Time windows are limited (24 h for spans and logs,
   30 days for metrics), page size is at most 100, and errors use `application/problem+json`.
-- **Retention:** spans and logs are kept 7 days, metrics 30 days, deleted every minute in
-  batches of 5,000 rows so ingest never waits behind one huge delete.
+- **Retention:** spans and logs are kept 7 days, metrics 30 days, resolved incidents and the
+  audit log 90 days (an open incident is never deleted), deleted every minute in batches of
+  5,000 rows so ingest never waits behind one huge delete. The first three can be changed on
+  the Settings screen (with the admin token), within fixed limits.
 
 **The dashboard**
 
@@ -142,8 +202,13 @@ crosses services only through the W3C `traceparent` header.
   the page share one address: no cross-origin setup, and a strict Content-Security-Policy
   (scripts, styles, fonts and data only from ServScope; fonts are bundled, nothing loads from
   elsewhere).
-- **Overview**: what needs attention, front-door rate, error rate and p95, each service's
-  health and error trend, the service map, and the latest failing requests.
+- **Overview**: open alerts first, then what needs attention, front-door rate, error rate and
+  p95, each service's health and error trend, the service map, and the latest failing
+  requests.
+- **Alerts, incident pages, Demo scenarios, Settings**: open incidents grouped by service,
+  rules with each service's live state, history; an incident's timeline next to a chart of
+  what the rule saw; scenario cards with their safety locks and a countdown; configuration,
+  retention and the audit log.
 - **Trace view**: a waterfall with the critical path outlined, "where the time went" in one
   sentence (counting only the time the caller was actually waiting), spans that kept running
   after their caller gave up, and each span's attributes and log lines.
@@ -152,6 +217,82 @@ crosses services only through the W3C `traceparent` header.
 - Every screen has loading, empty, error and stale states: if a refresh fails, the old data
   stays with a banner saying how old it is, instead of silently going stale.
 - Dark by default, with a light theme; works down to phone width.
+
+**Alerts and incidents**
+
+- **Four kinds of rule**: error rate above a share, p95 latency above a time, a service
+  unavailable, and failures rising (errors per minute as a multiple of the previous half
+  hour). Each has a window, a `for` time before it fires and a `recover` time before it
+  resolves. The four default rules watch the gateway, i.e. what customers feel; the
+  traces linked from an incident lead to the cause. ("Unavailable" watches every service.)
+- **A state machine per rule and service**: ok → pending → firing → recovering → ok, plus
+  no data. It is a pure function (`alerting.step`), unit-tested transition by transition,
+  and its state is stored, so a restart resumes a half-elapsed timer.
+- **Deduplication**: at most one *open* incident per rule and service, enforced by a partial
+  unique index in PostgreSQL, not just by code. A long outage is one incident; a breach
+  while recovering is an event on the same incident, not a new one. **Grouping**: one
+  outage can trip several rules on the same service (errors and latency, say); the
+  dashboard shows those together as one problem with several symptoms.
+- **Silence is not recovery**: if data stops while an incident is open, the incident stays
+  open (a "data stopped" event) until data shows the problem is gone.
+- **"Unavailable" tells down from starved.** When inventory is unreachable, orders fails
+  before calling payments, so payments goes silent too, while being fine. The rule looks at
+  the calls other services *attempted* (their client spans, tagged with `peer.service`):
+  callers tried and nothing arrived means unreachable (alert); callers stopped calling
+  means starved (no data, no alert); a service nobody calls, like the gateway, alerts on
+  silence alone. (Found on the live stack, where the first version alerted on payments.)
+- **Evidence**: when an incident opens, up to 5 traces are linked: failing requests for error
+  rules, the slowest for latency, the callers' failed calls for "unavailable". They come
+  from the same settled window the rule judged, so they are complete traces.
+- **One evaluator at a time**: each pass runs in one transaction behind a PostgreSQL advisory
+  lock, so two ServScope processes on one database can't both open the same incident.
+- **In-app only**: no email or Slack notifications (optional in the design, not built).
+
+**Failure scenarios and their safety locks**
+
+- Off by default, and three locks must all be open: `SERVSCOPE_ENV=demo`,
+  `SERVSCOPE_FAILURE_INJECTION=true`, and the admin token on every start and stop. Without the
+  first two the scenario endpoints are not registered at all (404). With
+  `SERVSCOPE_ENV=production`, ServScope refuses to start if injection is switched on.
+- The faults are real behaviour in the demo shop, switched through a `/_faults` endpoint on
+  payments and orders. That endpoint exists only when the service has `DEMO_FAULT_TOKEN`,
+  answers only to that token, and is left out of tracing. "Inventory unreachable" points
+  orders at a closed port, so the connection is genuinely refused.
+- Every scenario has a duration of at most 10 minutes, counted by the demo service itself, so
+  it ends even if ServScope crashes. Starting one stops any other. Each start and stop is in
+  the audit log.
+- In Compose, ServScope reaches the two switches over a separate `control` network; the
+  shop still reaches ServScope only through the Collector.
+
+**Admin access**
+
+- One admin token (`SERVSCOPE_ADMIN_TOKEN`, at least 16 characters) for every change: alert
+  rules, retention, acknowledging incidents, scenarios. It travels in the `Authorization`
+  header, never a cookie (so another website can't make the browser send it), and is
+  compared in constant time. No token configured: every admin call is refused.
+- The dashboard keeps the token in memory only, not in browser storage; reloading the page
+  locks it again. Reading stays open, like the rest of the read API.
+- Every change is written to the audit log in the same transaction as the change: who (and
+  from which address), what, when. Reading the audit log needs the token.
+
+**The double charge, fixed**
+
+Milestone 4 found that when orders gave up on a slow payments call, payments still charged
+the card for an order the customer was told failed. Two changes close it:
+
+1. **Deadline propagation.** Every call carries how long the caller will still wait
+   (`X-Request-Timeout-Ms`, a relative budget, so the two clocks don't have to agree).
+   Payments stops working on a charge when the budget runs out and charges nothing.
+2. **Void.** The budget starts when payments *receives* the call, a few milliseconds after
+   orders started its timer, so a charge could still land in that gap. So orders also sends
+   `POST /charges/void` when it gives up. A void reverses a completed charge; a void that
+   arrives first leaves a marker, and the late charge is refused. Either order: no money.
+
+The old test for this passed for the wrong reason: the in-process test transport cancelled
+payments' handler when orders timed out, which a real network never does. The test
+transport now runs each call independently of its caller, and the old code fails the new
+test (1 charge after a 504); the fixed code passes (0). On the live stack, 132 timed-out
+orders in one run produced 0 charges: all 132 were abandoned at the deadline.
 
 **How calls between services are recorded**
 
@@ -172,12 +313,19 @@ client 4xx as errors; this project keeps "refused" apart from "broken".)
 - Demo state (stock, charges) lives in memory and resets when a service restarts.
 - A reservation whose release fails (inventory unreachable at that moment) stays reserved;
   a periodic cleanup of stale reservations is not built.
-- The read API and the dashboard have no login, so ServScope must not be exposed beyond
-  localhost or a private network. Admin authentication arrives with the admin endpoints in
-  Milestone 5; until then Alerts, Demo scenarios and Settings show as "Soon".
-- **Known bug, fixed in Milestone 5:** when payments answers after orders has timed out, the
-  card can still be charged for an order the customer was told failed. The trace view shows
-  it happening (a striped payments span after the 504).
+- Reading (the dashboard and the read API) needs no login, so ServScope must not be exposed
+  beyond localhost or a private network. There is one admin token, not user accounts.
+- Alerts work on per-minute metrics, so windows are rounded to whole minutes, and an alert
+  can't fire sooner than the settle delay plus its `for` time (about a minute by default).
+- One void is sent per timed-out charge. If that void is also lost (payments unreachable at
+  that exact moment), the charge may stand; a real system would retry it from a durable
+  queue. The orders log says so when it happens.
+- Telling "unavailable" from "starved" relies on callers tagging their calls with
+  `peer.service`, which the demo services do. Uninstrumented callers can't be seen.
+- Grouping several rules' incidents for one service happens in the dashboard only; each
+  incident is still stored and resolved on its own.
+- Sample traces are linked when an incident opens (and when it breaches again), not
+  continuously.
 - Metrics count every server span, which is right because the demo samples 100% of
   requests. With trace sampling, the counts would undercount real traffic.
 - Two identical log lines from the same span in the same nanosecond are stored once (that is
@@ -205,17 +353,25 @@ npm run lint && npm run typecheck && npm test
 npx playwright test    # needs the stack running (docker compose up)
 ```
 
-CI runs all of these, then builds the Docker stack, runs the smoke test, and runs the
-Playwright tests in a real browser against it.
+CI runs all of these, then builds the Docker stack with failure scenarios on, runs the smoke
+test, runs the scripted incident (`incident-demo`), and runs the Playwright tests in a real
+browser against it, including the alert lifecycle: start a scenario from the Demo scenarios
+screen, see the alert, follow it to the failing trace.
+
+A local stack without Docker (as used while developing) is the same processes started by
+hand: `python -m servscope.app`, the Collector, the four `python -m demo_services.<name>`,
+and `python scripts/traffic.py`.
 
 ## Layout
 
 ```
-src/servscope/       ServScope: OTLP ingest, rollups, read API, trace analysis, retention
+src/servscope/       ServScope: OTLP ingest, rollups, read API, alerts, scenarios, retention
 src/demo_services/   The demo shop: gateway, orders, inventory, payments + OpenTelemetry setup
 migrations/          Alembic database migrations
 deploy/              OpenTelemetry Collector config
 scripts/smoke.py     End-to-end check: one checkout -> trace, logs, health and map via the API
+scripts/traffic.py   Steady demo traffic (the shop's customers)
+scripts/incident_demo.py  The scripted incident investigation, run in CI
 ui/                  The dashboard (React + TypeScript + Vite) and its Playwright tests
 tests/               Unit tests (no database) and integration tests (PostgreSQL)
 ```

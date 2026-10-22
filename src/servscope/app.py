@@ -1,4 +1,5 @@
-"""The ServScope API process: OTLP ingest, the read API, and the retention job."""
+"""The ServScope API process: OTLP ingest, the read and admin APIs, the alert evaluator, the
+retention job, and (in demo mode only) failure scenarios."""
 
 from __future__ import annotations
 
@@ -10,18 +11,21 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import text
 
-from . import __version__, retention
+from . import __version__, evaluator, retention
+from .alerts_api import router as alerts_router
 from .config import Settings, get_settings
 from .db import make_engine, make_sessionmaker
 from .ingest import WriteSlots
 from .ingest import router as ingest_router
 from .query import ApiError
 from .query import router as query_router
+from .scenarios import FaultSwitches, make_router
 from .stats import Stats
 
 PROBLEM = "application/problem+json"
@@ -60,28 +64,42 @@ def mount_ui(app: FastAPI, ui_dir: Path) -> None:
         return FileResponse(index, headers={**UI_HEADERS, "Cache-Control": "no-cache"})
 
 
-def problem(status: int, title: str, detail: str = "") -> JSONResponse:
+def problem(
+    status: int, title: str, detail: str = "", headers: dict[str, str] | None = None
+) -> JSONResponse:
     return JSONResponse(
-        {"title": title, "status": status, "detail": detail}, status, media_type=PROBLEM
+        {"title": title, "status": status, "detail": detail},
+        status,
+        headers=headers,
+        media_type=PROBLEM,
     )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, fault_transport: httpx.AsyncBaseTransport | None = None
+) -> FastAPI:
+    """`fault_transport` lets tests stand in for the demo services' fault switches."""
     settings = settings or get_settings()
+    switches = FaultSwitches(settings, fault_transport) if settings.scenarios_enabled else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = make_engine(settings.database_url)
         app.state.engine = engine
         app.state.sessionmaker = make_sessionmaker(engine)
-        task = None
+        stats = app.state.stats
+        tasks = []
         if settings.retention_enabled:
-            task = asyncio.create_task(retention.run_forever(engine, settings, app.state.stats))
+            tasks.append(asyncio.create_task(retention.run_forever(engine, settings, stats)))
+        if settings.alerts_enabled:
+            tasks.append(asyncio.create_task(evaluator.run_forever(engine, settings, stats)))
         yield
-        if task:
+        for task in tasks:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        if switches:
+            await switches.aclose()
         await engine.dispose()
 
     # No interactive docs in production: they advertise every endpoint to whoever finds the port.
@@ -95,7 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(ApiError)
     async def api_error(request: Request, exc: ApiError) -> JSONResponse:
-        return problem(exc.status, exc.title, exc.detail)
+        return problem(exc.status, exc.title, exc.detail, exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -149,6 +167,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(ingest_router)
     app.include_router(query_router)
+    app.include_router(alerts_router)
+    if switches:  # demo mode with injection switched on; otherwise the routes don't exist
+        app.include_router(make_router(switches))
     if settings.ui_dir is not None and (settings.ui_dir / "index.html").is_file():
         mount_ui(app, settings.ui_dir)  # last, so it never shadows an API route
     return app

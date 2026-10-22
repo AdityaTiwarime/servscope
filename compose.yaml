@@ -1,7 +1,9 @@
 # The whole stack: `docker compose up --build`   (smoke test: `docker compose run --rm smoke`)
 #
-# Two networks mirror the two trust zones in the design: the demo app can reach only the
-# Collector, and only the Collector can reach ServScope. PostgreSQL has no published port.
+# Networks mirror the trust zones in the design: the demo app can reach only the Collector,
+# and only the Collector can reach ServScope. PostgreSQL has no published port. A third,
+# `control`, joins ServScope to the two fault switches (payments, orders) for Demo scenarios;
+# those switches answer only to SERVSCOPE_FAULT_TOKEN, and exist only when it is set.
 
 name: servscope
 
@@ -43,9 +45,13 @@ services:
       SERVSCOPE_DATABASE_URL: postgresql+asyncpg://servscope:${SERVSCOPE_DB_PASSWORD}@postgres:5432/servscope
       SERVSCOPE_INGEST_TOKEN: ${SERVSCOPE_INGEST_TOKEN:?copy .env.example to .env first}
       SERVSCOPE_UI_DIR: /app/ui   # the dashboard, on the same address as the API
+      # Admin and failure scenarios. Empty token = admin off; injection is off unless set.
+      SERVSCOPE_ADMIN_TOKEN: ${SERVSCOPE_ADMIN_TOKEN:-}
+      SERVSCOPE_FAILURE_INJECTION: ${SERVSCOPE_FAILURE_INJECTION:-false}
+      SERVSCOPE_FAULT_TOKEN: ${SERVSCOPE_FAULT_TOKEN:-}
     ports:
       - "127.0.0.1:8000:8000"   # localhost only, never the whole network
-    networks: [servscope]
+    networks: [servscope, control]
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
@@ -94,7 +100,8 @@ services:
       INVENTORY_URL: http://inventory:8082
       PAYMENTS_URL: http://payments:8083
       PORT: "8081"
-    networks: [demo]
+      DEMO_FAULT_TOKEN: ${SERVSCOPE_FAULT_TOKEN:-}   # empty: no fault switch at all
+    networks: [demo, control]
     depends_on:
       inventory: { condition: service_healthy }
       payments: { condition: service_healthy }
@@ -110,6 +117,7 @@ services:
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
       PORT: "8082"
+      RESTOCK_EVERY_S: "30"   # steady traffic would otherwise empty the shelves
     networks: [demo]
     depends_on: [collector]
     healthcheck:
@@ -124,13 +132,34 @@ services:
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
       PORT: "8083"
-    networks: [demo]
+      DEMO_FAULT_TOKEN: ${SERVSCOPE_FAULT_TOKEN:-}
+    networks: [demo, control]
     depends_on: [collector]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/healthz')"]
       interval: 3s
       timeout: 3s
       retries: 20
+
+  # The shop's customers: steady checkouts, so metrics and alerts have something to judge.
+  traffic:
+    <<: *app
+    command: ["python", "scripts/traffic.py", "--gateway", "http://gateway:8080", "--rps", "${TRAFFIC_RPS:-2}"]
+    networks: [demo]
+    depends_on:
+      gateway: { condition: service_healthy }
+
+  # The scripted incident investigation: `docker compose run --rm incident-demo`
+  incident-demo:
+    <<: *app
+    restart: "no"
+    profiles: [test]
+    command: ["python", "scripts/incident_demo.py", "--api", "http://servscope:8000"]
+    environment:
+      SERVSCOPE_ADMIN_TOKEN: ${SERVSCOPE_ADMIN_TOKEN:-}
+    networks: [servscope]
+    depends_on:
+      servscope: { condition: service_healthy }
 
   # One-off end-to-end check, on both networks so it can reach the gateway and the database.
   smoke:
@@ -152,6 +181,7 @@ services:
 networks:
   demo:
   servscope:
+  control:
 
 volumes:
   pgdata:

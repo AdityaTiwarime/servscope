@@ -1,7 +1,10 @@
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate, useSearchParams } from "react-router-dom";
 
+import { api } from "../api/client";
 import { parseRange, RANGES, type Range } from "../lib/time";
+import { AdminToggle } from "./Admin";
 import {
   BellIcon,
   GearIcon,
@@ -21,11 +24,9 @@ const NAV = [
   { to: "/services", label: "Services", icon: ServicesIcon },
   { to: "/traces", label: "Traces", icon: TracesIcon },
   { to: "/logs", label: "Logs", icon: LogsIcon },
-];
-const LATER = [
-  { label: "Alerts", icon: BellIcon },
-  { label: "Demo scenarios", icon: PlayIcon },
-  { label: "Settings", icon: GearIcon },
+  { to: "/alerts", label: "Alerts", icon: BellIcon },
+  { to: "/scenarios", label: "Demo scenarios", icon: PlayIcon },
+  { to: "/settings", label: "Settings", icon: GearIcon },
 ];
 
 type Theme = "dark" | "light";
@@ -105,6 +106,13 @@ export function Layout() {
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [params] = useSearchParams();
   const range = params.get("range");
+  // The badge on Alerts: open incidents, shared (same query key) with the Alerts page.
+  const open = useQuery({
+    queryKey: ["incidents", "open"],
+    queryFn: ({ signal }) => api.incidents({ state: "open", limit: 50 }, signal),
+    refetchInterval: 5_000,
+  });
+  const openCount = open.data?.incidents.length ?? 0;
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
@@ -121,12 +129,10 @@ export function Layout() {
         {NAV.map(({ to, label, icon: Icon, end }) => (
           <NavLink key={to} to={range ? `${to}?range=${range}` : to} end={end} className="navlink">
             <Icon /> {label}
+            {to === "/alerts" && openCount > 0 && (
+              <span className="nav-badge" aria-label={`${openCount} open incident${openCount === 1 ? "" : "s"}`}>{openCount}</span>
+            )}
           </NavLink>
-        ))}
-        {LATER.map(({ label, icon: Icon }) => (
-          <span key={label} className="navlink disabled" aria-disabled="true" title="Arrives in Milestone 5">
-            <Icon /> {label} <span className="soon">Soon</span>
-          </span>
         ))}
         <div className="sidebar-foot">
           <button
@@ -137,7 +143,8 @@ export function Layout() {
           >
             {theme === "dark" ? <SunIcon /> : <MoonIcon />} {theme === "dark" ? "Light" : "Dark"} theme
           </button>
-          <span className="note">Read-only view. Keep ServScope on localhost or a private network.</span>
+          <AdminToggle />
+          <span className="note">Reading needs no login, so keep ServScope on localhost or a private network.</span>
         </div>
       </nav>
       <main className="main" id="main">

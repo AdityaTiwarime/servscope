@@ -124,3 +124,109 @@ export interface LogsResponse {
   logs: LogLine[];
   next_cursor: string | null;
 }
+
+// --- Milestone 5: alerts, incidents, scenarios, settings (src/servscope/alerts_api.py) ---
+
+export type RuleKind = "error_rate" | "p95_latency" | "unavailable" | "failure_rise";
+export type RuleStateName = "ok" | "pending" | "firing" | "recovering" | "no_data";
+
+export interface RuleState {
+  service: string;
+  state: RuleStateName;
+  since: string;
+  value: number | null;
+}
+
+export interface RuleInput {
+  name: string;
+  kind: RuleKind;
+  service: string | null; // null: every service
+  threshold: number;
+  window_s: number;
+  for_s: number;
+  recover_s: number;
+  enabled: boolean;
+}
+
+export interface AlertRule extends RuleInput {
+  id: number;
+  description: string;
+  updated_at: string;
+  states: RuleState[];
+}
+
+export interface Incident {
+  id: number;
+  rule_id: number | null; // null once the rule is deleted; the incident keeps its name
+  rule_name: string;
+  kind: RuleKind;
+  service: string;
+  threshold: number;
+  state: "open" | "resolved";
+  opened_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+  peak_value: number | null;
+  sample_trace_ids: string[];
+}
+
+export type EventType = "opened" | "peak" | "breached_again" | "no_data" | "data_back" | "acknowledged" | "resolved";
+
+export interface IncidentEvent {
+  time: string;
+  type: EventType;
+  value: number | null;
+  detail: string;
+  sample_trace_ids: string[];
+}
+
+export interface IncidentDetail extends Incident {
+  events: IncidentEvent[];
+  rule: AlertRule | null;
+}
+
+export interface IncidentsResponse {
+  incidents: Incident[];
+  next_cursor: string | null;
+}
+
+export interface Scenario {
+  name: string;
+  title: string;
+  target: string;
+  fault: Record<string, unknown>;
+  what_happens: string;
+  what_to_look_for: string;
+}
+
+export interface ScenariosResponse {
+  scenarios: Scenario[];
+  max_duration_s: number;
+  active: { name: string; target: string; remaining_s: number } | null;
+  targets: Record<string, "reachable" | "unreachable">;
+}
+
+export interface RetentionDays {
+  spans: number;
+  logs: number;
+  rollups: number;
+  incidents: number;
+}
+
+export interface Config {
+  env: "demo" | "production";
+  admin_enabled: boolean;
+  scenarios_enabled: boolean;
+  alerts: { enabled: boolean; interval_s: number; settle_s: number };
+  health: { degraded_error_rate: number; degraded_p95_ms: number; down_error_rate: number; no_data_after_s: number };
+  latency: { bucket_edges_ms: number[]; min_samples: number };
+  ingest: { max_body_bytes: number; write_slots: number; max_attributes_bytes: number };
+  retention_days: RetentionDays;
+}
+
+export interface AuditEntry {
+  time: string;
+  actor: string;
+  action: string;
+  details: Record<string, unknown>;
+}

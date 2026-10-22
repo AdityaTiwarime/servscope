@@ -568,17 +568,66 @@ async def test_retention_deletes_only_expired_rows(clean_db: str) -> None:
                 {"when": when, "b": [1] + [0] * 11},
             )
 
+        # Incidents: only RESOLVED ones expire. One opened long ago but still open must stay.
+        for state, opened, resolved in (
+            ("resolved", now - timedelta(days=100), now - timedelta(days=91)),
+            ("resolved", now - timedelta(days=100), now - timedelta(days=89)),
+            ("open", now - timedelta(days=100), None),
+        ):
+            await conn.execute(
+                text(
+                    "INSERT INTO incidents (rule_name, kind, service, threshold, state, "
+                    "opened_at, resolved_at) VALUES ('r', 'error_rate', 'orders', 0.1, :s, :o, :r)"
+                ),
+                {"s": state, "o": opened, "r": resolved},
+            )
+        for when in (now - timedelta(days=91), now - timedelta(days=1)):
+            await conn.execute(
+                text(
+                    "INSERT INTO audit_log (time, actor, action, details) "
+                    "VALUES (:t, 'a', 'x', '{}')"
+                ),
+                {"t": when},
+            )
+
     # A batch size of 2 makes the job loop, which is the path a big backlog takes.
     deleted = await retention.run_once(engine, settings(clean_db, retention_batch_size=2), now)
     async with engine.connect() as conn:
         left = {
             t: (await conn.execute(text(f"SELECT count(*) FROM {t}"))).scalar_one()  # noqa: S608
-            for t in ("spans", "logs", "metric_rollups")
+            for t in ("spans", "logs", "metric_rollups", "incidents", "audit_log")
         }
     await engine.dispose()
 
-    assert deleted == {"spans": 5, "logs": 1, "metric_rollups": 1}
-    assert left == {"spans": 3, "logs": 1, "metric_rollups": 1}
+    assert deleted == {
+        "spans": 5, "logs": 1, "metric_rollups": 1, "incidents": 1, "audit_log": 1
+    }  # fmt: skip
+    assert left == {"spans": 3, "logs": 1, "metric_rollups": 1, "incidents": 2, "audit_log": 1}
+
+
+async def test_retention_uses_days_saved_from_the_settings_screen(clean_db: str) -> None:
+    engine = create_async_engine(clean_db)
+    now = datetime.now(UTC)
+    async with engine.begin() as conn:
+        for when in (now - timedelta(days=3), now - timedelta(days=1)):
+            await conn.execute(
+                text("INSERT INTO metric_rollups VALUES ('orders', 'op', :when, 1, 0, :b)"),
+                {"when": when, "b": [1] + [0] * 11},
+            )
+        # Saved from the dashboard: keep rollups for 2 days instead of the default 30. An
+        # out-of-range value someone wrote into the table by hand is ignored.
+        await conn.execute(
+            text(
+                "INSERT INTO app_settings (key, value) VALUES "
+                "('retention', '{\"rollups\": 2, \"spans\": 5000}')"
+            )
+        )
+    deleted = await retention.run_once(engine, settings(clean_db), now)
+    async with engine.connect() as conn:
+        days = await retention.effective_days(conn, settings(clean_db))
+    await engine.dispose()
+    assert deleted["metric_rollups"] == 1
+    assert days["rollups"] == 2 and days["spans"] == 7
 
 
 def test_models_and_migrations_agree(db_url: str) -> None:

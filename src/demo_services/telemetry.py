@@ -17,6 +17,7 @@ import asyncio
 import logging
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,6 +40,13 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcess
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 BACKSTOP_TIMEOUT = httpx.Timeout(10.0)
+# How much time the caller will still wait, in milliseconds, sent with every call. HTTP has no
+# standard header for this (gRPC uses grpc-timeout); a relative budget avoids depending on the
+# two services' clocks agreeing, which an absolute deadline would.
+TIMEOUT_HEADER = "X-Request-Timeout-Ms"
+# Where a call goes when a demo fault cuts a dependency off: port 9 (discard) on loopback has
+# nothing listening, so the OS refuses the connection, a real network failure, not a fake one.
+CUT_OFF_URL = "http://127.0.0.1:9"
 
 
 @dataclass
@@ -83,7 +91,7 @@ def setup_telemetry(
     FastAPIInstrumentor.instrument_app(
         app,
         tracer_provider=tracer_provider,
-        excluded_urls="healthz",
+        excluded_urls="healthz,_faults",
         exclude_spans=["receive", "send"],  # one span per request, not three
     )
 
@@ -113,6 +121,9 @@ class Downstream:
     - a 4xx answer is NOT: a declined card or an out-of-stock reply is the other service
       working correctly. (The OpenTelemetry convention suggests marking client 4xx as
       errors; this demo deliberately keeps "refused" apart from "broken".)
+
+    Every call also tells the callee how long the caller will wait (TIMEOUT_HEADER), so the
+    callee can stop working on an answer nobody is waiting for.
     """
 
     def __init__(
@@ -121,13 +132,16 @@ class Downstream:
         name: str,
         base_url: str,
         transport: httpx.AsyncBaseTransport | None = None,
+        is_cut_off: Callable[[str], bool] | None = None,
     ):
         self.name = name
+        self.is_cut_off = is_cut_off or (lambda _name: False)
         self.tracer = provider.get_tracer("demo.downstream")
         # The 10 s network timeout is only a backstop; each call passes its real deadline.
         self.client = httpx.AsyncClient(
             base_url=base_url, transport=transport, timeout=BACKSTOP_TIMEOUT
         )
+        self.cut_off = httpx.AsyncClient(base_url=CUT_OFF_URL, timeout=BACKSTOP_TIMEOUT)
 
     async def request(
         self,
@@ -146,12 +160,18 @@ class Downstream:
         ) as span:
             span.set_attribute("http.request.method", method)
             span.set_attribute("server.address", self.name)
+            # The logical name of the service being called (OpenTelemetry's peer.service).
+            # It lets ServScope tell "callers tried and nothing arrived" (unreachable) from
+            # "nobody called" (starved), even when the call never reached the other side.
+            span.set_attribute("peer.service", self.name)
             span.set_attribute("url.path", path)
             outgoing = dict(headers or {})
+            outgoing[TIMEOUT_HEADER] = str(max(1, round(deadline_s * 1000)))
             propagate.inject(outgoing)  # traceparent of THIS span, so the callee is its child
+            client = self.cut_off if self.is_cut_off(self.name) else self.client
             try:
                 async with asyncio.timeout(deadline_s):
-                    response = await self.client.request(method, path, headers=outgoing, **kwargs)
+                    response = await client.request(method, path, headers=outgoing, **kwargs)
             except TimeoutError as exc:
                 span.record_exception(exc)
                 span.set_attribute("error.type", "timeout")

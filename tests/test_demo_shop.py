@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,24 +22,41 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import SpanKind, StatusCode
 
 from demo_services import gateway, inventory, orders, payments
+from demo_services.faults import Faults, FaultSpec
 from demo_services.inventory import INITIAL_STOCK
 from demo_services.telemetry import Exporters
 
 
 class IsolatedASGITransport(httpx.ASGITransport):
-    """An in-process transport that behaves like a network hop for tracing.
+    """An in-process transport that behaves like a network hop.
 
-    A plain ASGITransport runs the called app in the caller's context, so the called service
-    would "see" the caller's span without any header, which would hide a broken propagation.
-    Running each call in an empty OpenTelemetry context means the `traceparent` header is the
-    only way trace context can cross, exactly as between real processes."""
+    Two things a plain ASGITransport gets wrong, both of which hid real bugs:
+
+    - It runs the called app in the caller's context, so the called service would "see" the
+      caller's span without any header, which would hide a broken propagation. Here each call
+      runs in an empty OpenTelemetry context: `traceparent` is the only way across.
+    - When the caller gives up (a timeout cancels it), it cancels the called app too, so a
+      slow payments call simply stopped. Over a real network the callee never hears about
+      the timeout and finishes its work. Here each call runs in its own task that the
+      caller's cancellation cannot reach, so a late charge really happens, as in production.
+    """
+
+    def __init__(self, app: Any):
+        super().__init__(app=app)
+        self.pending: set[asyncio.Task[httpx.Response]] = set()
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        token = otel_context.attach(otel_context.Context())
-        try:
-            return await super().handle_async_request(request)
-        finally:
-            otel_context.detach(token)
+        async def call() -> httpx.Response:
+            token = otel_context.attach(otel_context.Context())
+            try:
+                return await super(IsolatedASGITransport, self).handle_async_request(request)
+            finally:
+                otel_context.detach(token)
+
+        task = asyncio.create_task(call())
+        self.pending.add(task)
+        task.add_done_callback(self.pending.discard)
+        return await asyncio.shield(task)
 
 
 @dataclass
@@ -49,33 +66,58 @@ class Shop:
     logs: InMemoryLogRecordExporter
     inventory: Any
     payments: Any
+    hops: list[IsolatedASGITransport]
+    payments_faults: Faults
+    orders_faults: Faults
+
+    async def settle(self) -> None:
+        """Wait until every service has finished, including work nobody waits for any more."""
+        while pending := [t for hop in self.hops for t in hop.pending]:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    async def close(self) -> None:
+        await self.client.aclose()
+        await self.settle()
 
 
 async def build_shop(
-    payment_timeout: float = 2.0, inventory_transport: httpx.AsyncBaseTransport | None = None
+    payment_timeout: float = 2.0,
+    inventory_transport: httpx.AsyncBaseTransport | None = None,
+    payments_transport: Callable[[Any], httpx.AsyncBaseTransport] | None = None,
 ) -> Shop:
     spans, logs = InMemorySpanExporter(), InMemoryLogRecordExporter()
     exporters = Exporters(spans, logs)
+    pay_faults, ord_faults = Faults(), Faults()
     inv = inventory.create_app(exporters)
-    pay = payments.create_app(exporters)
+    pay = payments.create_app(exporters, faults=pay_faults)
+    to_inv, to_pay = IsolatedASGITransport(app=inv), IsolatedASGITransport(app=pay)
     orders_app = orders.create_app(
         "http://inventory",
         "http://payments",
         exporters,
-        inventory_transport=inventory_transport or IsolatedASGITransport(app=inv),
-        payments_transport=IsolatedASGITransport(app=pay),
+        inventory_transport=inventory_transport or to_inv,
+        payments_transport=payments_transport(to_pay) if payments_transport else to_pay,
         payment_timeout=payment_timeout,
+        faults=ord_faults,
     )
-    gw = gateway.create_app("http://orders", exporters, IsolatedASGITransport(app=orders_app))
-    client = httpx.AsyncClient(transport=IsolatedASGITransport(app=gw), base_url="http://gateway")
-    return Shop(client, spans, logs, inv, pay)
+    to_ord = IsolatedASGITransport(app=orders_app)
+    gw = gateway.create_app("http://orders", exporters, to_ord)
+    to_gw = IsolatedASGITransport(app=gw)
+    client = httpx.AsyncClient(transport=to_gw, base_url="http://gateway")
+    return Shop(
+        client, spans, logs, inv, pay, [to_inv, to_pay, to_ord, to_gw], pay_faults, ord_faults
+    )
 
 
 @pytest.fixture
 async def shop() -> AsyncIterator[Shop]:
     s = await build_shop()
     yield s
-    await s.client.aclose()
+    await s.close()
+
+
+def slow_payments(shop: Shop, seconds: float) -> None:
+    shop.payments_faults.set(FaultSpec(delay_ms=round(seconds * 1000), duration_s=60))
 
 
 def caller_headers() -> tuple[dict[str, str], str, str]:
@@ -87,11 +129,14 @@ def hexid(n: int, width: int) -> str:
     return format(n, f"0{width}x")
 
 
-def server_span(spans: list[ReadableSpan], service: str) -> ReadableSpan:
+def server_span(spans: list[ReadableSpan], service: str, name: str | None = None) -> ReadableSpan:
+    """The one server span of `service` (optionally the one named `name`, e.g. "POST /charges")."""
     [s] = [
         s
         for s in spans
-        if s.kind == SpanKind.SERVER and s.resource.attributes["service.name"] == service
+        if s.kind == SpanKind.SERVER
+        and s.resource.attributes["service.name"] == service
+        and (name is None or s.name == name)
     ]
     return s
 
@@ -176,10 +221,10 @@ async def test_declined_card_returns_402_and_releases_stock(shop: Shop) -> None:
 
 async def test_payment_timeout_returns_504_marks_errors_and_releases_stock() -> None:
     s = await build_shop(payment_timeout=0.2)
-    s.payments.state.delay_seconds = 1.0  # payments answers after orders has given up
+    slow_payments(s, 1.0)  # payments would answer after orders has given up
     headers, _, _ = caller_headers()
     r = await s.client.post("/checkout", json=TEA_AND_MUG, headers=headers)
-    await s.client.aclose()
+    await s.close()
 
     assert r.status_code == 504
     assert r.json()["title"] == "Payment timed out"
@@ -199,7 +244,7 @@ async def test_inventory_down_returns_503() -> None:
 
     s = await build_shop(inventory_transport=httpx.MockTransport(refuse))
     r = await s.client.post("/checkout", json=TEA_AND_MUG)
-    await s.client.aclose()
+    await s.close()
 
     assert r.status_code == 503
     assert r.json()["title"] == "Inventory unavailable"
@@ -281,9 +326,9 @@ async def test_log_lines_carry_their_request_trace_and_span(shop: Shop) -> None:
 
 async def test_payment_timeout_is_explained_in_the_logs() -> None:
     s = await build_shop(payment_timeout=0.2)
-    s.payments.state.delay_seconds = 1.0
+    slow_payments(s, 1.0)
     await s.client.post("/checkout", json=TEA_AND_MUG)
-    await s.client.aclose()
+    await s.close()
     errors = [str(line.body) for line in log_lines(s) if line.severity_text == "ERROR"]
     assert any("payments timed out after 0.2s" in m for m in errors)
     assert any("released reservation" in str(line.body) for line in log_lines(s))
@@ -300,12 +345,14 @@ async def test_no_card_token_ever_appears_in_logs(shop: Shop) -> None:
 
 
 def client_span_to(spans: list[ReadableSpan], callee: str) -> ReadableSpan:
+    """The caller's span for the main POST to `callee` (not a void or a release)."""
+    main_path = {"payments": "/charges", "inventory": "/reservations", "orders": "/orders"}
     [s] = [
         s
         for s in spans
         if s.kind == SpanKind.CLIENT
         and (s.attributes or {}).get("server.address") == callee
-        and (s.attributes or {}).get("http.request.method") == "POST"
+        and (s.attributes or {}).get("url.path") == main_path[callee]
     ]
     return s
 
@@ -313,9 +360,9 @@ def client_span_to(spans: list[ReadableSpan], callee: str) -> ReadableSpan:
 async def test_a_timed_out_call_is_an_error_on_the_callers_side() -> None:
     # The callee may still answer 201 later; the caller's span must already say "timeout".
     s = await build_shop(payment_timeout=0.2)
-    s.payments.state.delay_seconds = 1.0
+    slow_payments(s, 1.0)
     await s.client.post("/checkout", json=TEA_AND_MUG)
-    await s.client.aclose()
+    await s.close()
     call = client_span_to(list(s.spans.get_finished_spans()), "payments")
     assert call.status.status_code == StatusCode.ERROR
     assert (call.attributes or {})["error.type"] == "timeout"
@@ -335,7 +382,153 @@ async def test_unreachable_service_is_an_error_with_its_cause() -> None:
 
     s = await build_shop(inventory_transport=httpx.MockTransport(refuse))
     await s.client.post("/checkout", json=TEA_AND_MUG)
-    await s.client.aclose()
+    await s.close()
     call = client_span_to(list(s.spans.get_finished_spans()), "inventory")
     assert call.status.status_code == StatusCode.ERROR
     assert (call.attributes or {})["error.type"] == "ConnectError"
+
+
+# --- the double charge (found in Milestone 4, fixed in Milestone 5) ---------------------
+
+
+async def test_a_timed_out_order_is_never_charged() -> None:
+    """Regression: payments used to finish the charge after orders had answered 504."""
+    s = await build_shop(payment_timeout=0.2)
+    slow_payments(s, 1.0)
+    r = await s.client.post("/checkout", json=TEA_AND_MUG)
+    assert r.status_code == 504
+    await s.close()  # wait for payments too, the part nobody is waiting for
+
+    assert s.payments.state.charge_count == 0
+    assert s.payments.state.abandoned_count == 1  # it stopped at the caller's deadline
+    pay = server_span(list(s.spans.get_finished_spans()), "payments", "POST /charges")
+    assert (pay.attributes or {})["payment.abandoned"] == "deadline_exceeded"
+    assert pay.end_time - pay.start_time < 0.6e9  # gave up at ~0.2 s, not after the full 1 s
+    assert s.inventory.state.stock == INITIAL_STOCK
+
+
+class WithoutBudget(httpx.AsyncBaseTransport):
+    """A caller that sends no time budget, so payments cannot know when to give up. This is
+    the race the void exists for: the charge completes after the caller stopped waiting."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport):
+        self.inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        del request.headers["X-Request-Timeout-Ms"]
+        return await self.inner.handle_async_request(request)
+
+
+async def test_a_charge_arriving_after_the_void_is_refused() -> None:
+    s = await build_shop(payment_timeout=0.2, payments_transport=WithoutBudget)
+    slow_payments(s, 1.0)
+    r = await s.client.post("/checkout", json=TEA_AND_MUG)
+    assert r.status_code == 504
+    await s.close()
+
+    assert s.payments.state.charge_count == 0
+    messages = [str(line.body) for line in log_lines(s)]
+    assert any("refused: the order was already cancelled" in m for m in messages)
+
+
+async def test_a_void_reverses_a_completed_charge_once(shop: Shop) -> None:
+    pay = httpx.AsyncClient(transport=httpx.ASGITransport(app=shop.payments), base_url="http://p")
+    body = {"order_id": "o-9", "amount_paise": 12_000, "card_token": "tok_demo_visa"}
+    key = {"Idempotency-Key": "order-o-9-key"}
+    charged = await pay.post("/charges", json=body, headers=key)
+    first = await pay.post("/charges/void", headers=key)
+    again = await pay.post("/charges/void", headers=key)  # a retried void changes nothing
+    replay = await pay.post("/charges", json=body, headers=key)
+    await pay.aclose()
+
+    assert charged.status_code == 201
+    assert first.json() == {"voided": True, "charge_id": charged.json()["charge_id"]}
+    assert again.json()["voided"] is False
+    assert replay.status_code == 409  # a cancelled order cannot be charged again
+    assert (shop.payments.state.charge_count, shop.payments.state.void_count) == (1, 1)
+
+
+# --- the fault switch used by Demo scenarios ------------------------------------------
+
+FAULT_TOKEN = "fault-token-for-tests"
+
+
+async def test_fault_switch_does_not_exist_without_its_token(
+    shop: Shop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DEMO_FAULT_TOKEN", raising=False)
+    pay = httpx.AsyncClient(transport=httpx.ASGITransport(app=shop.payments), base_url="http://p")
+    r = await pay.put("/_faults", json={"delay_ms": 3000, "duration_s": 60})
+    await pay.aclose()
+    assert r.status_code == 404
+
+
+async def test_fault_switch_needs_the_token_and_switches_itself_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEMO_FAULT_TOKEN", FAULT_TOKEN)
+    now = [1000.0]
+    faults = Faults(clock=lambda: now[0])
+    spans, logs = InMemorySpanExporter(), InMemoryLogRecordExporter()
+    app = payments.create_app(Exporters(spans, logs), faults=faults)
+    c = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://p")
+    spec = {"delay_ms": 1500, "duration_s": 60}
+
+    assert (await c.put("/_faults", json=spec)).status_code == 401
+    bad = {"X-Fault-Token": "wrong"}
+    assert (await c.put("/_faults", json=spec, headers=bad)).status_code == 401
+    good = {"X-Fault-Token": FAULT_TOKEN}
+    too_long = {"delay_ms": 1500, "duration_s": 601}
+    assert (await c.put("/_faults", json=too_long, headers=good)).status_code == 422
+
+    r = await c.put("/_faults", json=spec, headers=good)
+    assert r.status_code == 200
+    assert r.json()["active"]["delay_ms"] == 1500
+    now[0] += 59
+    assert (await c.get("/_faults", headers=good)).json()["remaining_s"] == 1.0
+    now[0] += 1  # the duration runs out on the service's own clock
+    assert (await c.get("/_faults", headers=good)).json()["active"] is None
+    await c.aclose()
+    assert spans.get_finished_spans() == ()  # flipping the switch is not shop traffic
+    assert any("demo fault switched ON" in str(e.log_record.body) for e in logs.get_finished_logs())
+
+
+async def test_payments_error_fault_fails_checkouts_without_charging(shop: Shop) -> None:
+    shop.payments_faults.set(FaultSpec(error_rate=1.0, duration_s=60))
+    r = await shop.client.post("/checkout", json=TEA_AND_MUG)
+    await shop.settle()
+
+    assert r.status_code == 502
+    pay = server_span(list(shop.spans.get_finished_spans()), "payments")
+    assert pay.status.status_code == StatusCode.ERROR
+    assert (pay.attributes or {})["demo.fault"] == "error"
+    assert shop.payments.state.charge_count == 0
+    assert shop.inventory.state.stock == INITIAL_STOCK
+
+
+async def test_cut_off_inventory_is_a_real_connection_failure(shop: Shop) -> None:
+    shop.orders_faults.set(FaultSpec(unreachable=["inventory"], duration_s=60))
+    r = await shop.client.post("/checkout", json=TEA_AND_MUG)
+    await shop.settle()
+
+    assert r.status_code == 503
+    spans = list(shop.spans.get_finished_spans())
+    call = client_span_to(spans, "inventory")
+    assert (call.attributes or {})["error.type"] == "ConnectError"  # refused by the OS
+    services = {s.resource.attributes["service.name"] for s in spans}
+    assert "inventory" not in services  # nothing reached it
+
+
+async def test_inventory_restocks_on_its_schedule() -> None:
+    spans, logs = InMemorySpanExporter(), InMemoryLogRecordExporter()
+    app = inventory.create_app(Exporters(spans, logs), restock_every_s=0.05)
+    async with app.router.lifespan_context(app):
+        c = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://i")
+        r = await c.post(
+            "/reservations", json={"order_id": "o1", "items": [{"sku": "mug", "qty": 5}]}
+        )
+        assert r.status_code == 201
+        assert app.state.stock["mug"] == INITIAL_STOCK["mug"] - 5
+        await asyncio.sleep(0.15)
+        assert app.state.stock == INITIAL_STOCK
+        await c.aclose()

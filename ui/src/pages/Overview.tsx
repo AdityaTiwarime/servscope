@@ -8,6 +8,7 @@ import { Sparkline } from "../components/Charts";
 import { AlertIcon, ArrowRight, CheckIcon } from "../components/Icons";
 import { RangePicker, TraceSearch, useRange } from "../components/Layout";
 import { ServiceMap } from "../components/ServiceMap";
+import { IncidentGroups, useOpenIncidents } from "./Alerts";
 import { Empty, ErrorState, Skeleton, StaleBanner } from "../components/States";
 import { formatAgo, formatClock, formatMs, formatNumber, formatPercentile, formatRate, shortId } from "../lib/format";
 import { STEP, windowFor, type Range } from "../lib/time";
@@ -67,6 +68,7 @@ function useOverview(range: Range) {
 export function Overview() {
   const [range] = useRange();
   const { services, deps, failing, errorSeries } = useOverview(range);
+  const incidents = useOpenIncidents().data?.incidents ?? [];
   const list = services.data?.services ?? [];
   const edges = deps.data?.edges ?? [];
   const door = frontDoor(list, edges);
@@ -98,6 +100,12 @@ export function Overview() {
       </header>
 
       {services.isError && services.data && <StaleBanner error={services.error} updatedAt={services.dataUpdatedAt} />}
+
+      {incidents.length > 0 && (
+        <section className="incident-list" aria-label="Active alerts">
+          <IncidentGroups incidents={incidents} />
+        </section>
+      )}
 
       {services.isPending ? (
         <div className="panel"><Skeleton rows={2} /></div>

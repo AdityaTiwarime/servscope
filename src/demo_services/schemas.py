@@ -49,6 +49,12 @@ class Charge(BaseModel):
     charge_id: str
     order_id: str
     amount_paise: int
+    status: str = "captured"  # or "voided" once reversed
+
+
+class VoidResult(BaseModel):
+    voided: bool  # True when a captured charge was reversed by this call
+    charge_id: str | None = None
 
 
 class Problem(BaseModel):

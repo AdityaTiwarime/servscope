@@ -46,7 +46,8 @@ export interface SeriesPoint {
   v: number | null;
 }
 
-/** A labelled time-series chart with a y axis, gaps for missing data and an optional limit line. */
+/** A labelled time-series chart with a y axis, gaps for missing data, an optional limit
+ * line and an optional shaded period (an incident, from when it fired to when it resolved). */
 export function LineChart({
   title,
   points,
@@ -54,6 +55,7 @@ export function LineChart({
   format,
   limit,
   limitLabel,
+  band,
 }: {
   title: string;
   points: SeriesPoint[];
@@ -61,6 +63,7 @@ export function LineChart({
   format: (v: number) => string;
   limit?: number;
   limitLabel?: string;
+  band?: { from: string; to: string | null; label: string };
 }) {
   // Close to the width it is shown at, so 11 px labels stay 11 px.
   const W = 440;
@@ -89,6 +92,14 @@ export function LineChart({
     if (prev === null && next === null) dots.push({ cx: x(i), cy: y(p.v) });
   });
   close();
+  // Points are evenly spaced in time, so a timestamp maps linearly between the first and last.
+  const first = points.length ? new Date(points[0]?.t ?? 0).getTime() : 0;
+  const last = points.length ? new Date(points[points.length - 1]?.t ?? 0).getTime() : 0;
+  const xAt = (iso: string) => {
+    const span = last - first || 1;
+    const f = Math.min(1, Math.max(0, (new Date(iso).getTime() - first) / span));
+    return PAD.l + f * (W - PAD.l - PAD.r);
+  };
   const yTicks = [0, top / 2, top];
   const xLabels = points.length > 1 ? [0, Math.floor((points.length - 1) / 2), points.length - 1] : [0];
   const summary = known.length ? `latest ${format(known[known.length - 1] ?? 0)}, highest ${format(Math.max(...known))}` : "no data in this window";
@@ -97,6 +108,29 @@ export function LineChart({
     <figure style={{ margin: 0 }}>
       <figcaption className="chart-title">{title}</figcaption>
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} role="img" aria-label={`${title}: ${summary}`}>
+        {band && points.length > 1 && (
+          <g>
+            <rect
+              x={xAt(band.from)}
+              y={PAD.t}
+              width={Math.max(2, (band.to ? xAt(band.to) : W - PAD.r) - xAt(band.from))}
+              height={H - PAD.t - PAD.b}
+              fill="var(--bad)"
+              opacity={0.1}
+            />
+            <line x1={xAt(band.from)} x2={xAt(band.from)} y1={PAD.t} y2={H - PAD.b} stroke="var(--bad)" strokeDasharray="3 3" />
+            {/* Label on the side with room: right of the line, or left when it starts near the end. */}
+            <text
+              x={xAt(band.from) > W - PAD.r - 60 ? xAt(band.from) - 4 : xAt(band.from) + 4}
+              textAnchor={xAt(band.from) > W - PAD.r - 60 ? "end" : "start"}
+              y={PAD.t + 11}
+              fontSize="11"
+              fill="var(--bad)"
+            >
+              {band.label}
+            </text>
+          </g>
+        )}
         {yTicks.map((v) => (
           <g key={v}>
             <line x1={PAD.l} x2={W - PAD.r} y1={y(v)} y2={y(v)} stroke="var(--line-soft)" />

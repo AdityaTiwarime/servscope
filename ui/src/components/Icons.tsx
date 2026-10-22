@@ -61,3 +61,16 @@ export const SunIcon = (p: Props) => (
 );
 export const MoonIcon = (p: Props) => <Svg {...p}><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z" /></Svg>;
 export const RetryIcon = (p: Props) => <Svg {...p}><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3" /></Svg>;
+export const LockIcon = (p: Props) => (
+  <Svg {...p}><rect x="3" y="7" width="10" height="7" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></Svg>
+);
+export const UnlockIcon = (p: Props) => (
+  <Svg {...p}><rect x="3" y="7" width="10" height="7" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 4.8-1" /></Svg>
+);
+export const StopIcon = (p: Props) => <Svg {...p}><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" /></Svg>;
+export const PlusIcon = (p: Props) => <Svg {...p}><path d="M8 3v10M3 8h10" /></Svg>;
+export const TrashIcon = (p: Props) => (
+  <Svg {...p}><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4" /></Svg>
+);
+export const PencilIcon = (p: Props) => <Svg {...p}><path d="M10.5 2.5l3 3-8 8H2.5v-3z" /></Svg>;
+export const ClockIcon = (p: Props) => <Svg {...p}><circle cx="8" cy="8" r="6.5" /><path d="M8 4.5V8l2.5 1.5" /></Svg>;

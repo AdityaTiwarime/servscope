@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Response
@@ -16,15 +19,35 @@ from .telemetry import Exporters, setup_telemetry
 INITIAL_STOCK = {"tea": 100, "mug": 50, "beans": 30}
 
 
-def create_app(exporters: Exporters | None = None) -> FastAPI:
-    app = FastAPI(title="Demo inventory", docs_url=None, redoc_url=None)
-    provider, log = setup_telemetry(app, "inventory", exporters)
-    tracer = provider.get_tracer("demo.inventory")
-
+def create_app(exporters: Exporters | None = None, restock_every_s: float = 0) -> FastAPI:
+    """`restock_every_s` > 0 tops stock back up on that schedule (a supplier delivery), so
+    the long-running demo with steady traffic doesn't end up permanently out of stock."""
     stock = dict(INITIAL_STOCK)
     reservations: dict[str, dict[str, int]] = {}
     # One lock around check-and-take, so two orders can't both grab the last mug.
     lock = asyncio.Lock()
+
+    async def restock_forever() -> None:
+        while True:
+            await asyncio.sleep(restock_every_s)
+            async with lock:
+                low = {sku: n for sku, n in stock.items() if n < INITIAL_STOCK[sku]}
+                stock.update({sku: INITIAL_STOCK[sku] for sku in low})
+            if low:
+                log.info("restocked %s", sorted(low))
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        task = asyncio.create_task(restock_forever()) if restock_every_s > 0 else None
+        yield
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    app = FastAPI(title="Demo inventory", docs_url=None, redoc_url=None, lifespan=lifespan)
+    provider, log = setup_telemetry(app, "inventory", exporters)
+    tracer = provider.get_tracer("demo.inventory")
     app.state.stock = stock
 
     @app.get("/healthz")
@@ -70,7 +93,8 @@ def create_app(exporters: Exporters | None = None) -> FastAPI:
 
 
 def main() -> None:
-    uvicorn.run(create_app(), host="0.0.0.0", port=int(os.environ.get("PORT", "8082")))  # noqa: S104
+    app = create_app(restock_every_s=float(os.environ.get("RESTOCK_EVERY_S", "0")))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8082")))  # noqa: S104
 
 
 if __name__ == "__main__":

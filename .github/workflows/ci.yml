@@ -24,7 +24,7 @@ jobs:
           --health-cmd "pg_isready -U servscope" --health-interval 2s --health-retries 30
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.11.32"
       - run: uv sync --frozen --python 3.12
@@ -64,16 +64,24 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - name: create .env from the example
+      - name: create .env from the example (failure scenarios on, fresh random secrets)
         run: |
           cp .env.example .env
           sed -i "s/^SERVSCOPE_INGEST_TOKEN=.*/SERVSCOPE_INGEST_TOKEN=$(openssl rand -hex 24)/" .env
           sed -i "s/^SERVSCOPE_DB_PASSWORD=.*/SERVSCOPE_DB_PASSWORD=$(openssl rand -hex 16)/" .env
+          ADMIN=$(openssl rand -hex 24)
+          sed -i "s/^SERVSCOPE_ADMIN_TOKEN=.*/SERVSCOPE_ADMIN_TOKEN=$ADMIN/" .env
+          sed -i "s/^SERVSCOPE_FAULT_TOKEN=.*/SERVSCOPE_FAULT_TOKEN=$(openssl rand -hex 24)/" .env
+          sed -i "s/^SERVSCOPE_FAILURE_INJECTION=.*/SERVSCOPE_FAILURE_INJECTION=true/" .env
+          echo "::add-mask::$ADMIN"
+          echo "SERVSCOPE_ADMIN_TOKEN=$ADMIN" >> "$GITHUB_ENV"
       - name: start the stack
         run: docker compose up --build --detach
       - name: smoke test (checkout -> trace in PostgreSQL)
         # `run` honours depends_on, so this waits until gateway and ServScope are healthy.
         run: timeout 300 docker compose run --rm smoke
+      - name: scripted incident (payments timeout -> alert -> evidence -> fix -> resolved)
+        run: timeout 900 docker compose run --rm incident-demo
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -88,6 +96,7 @@ jobs:
         env:
           SERVSCOPE_URL: http://localhost:8000
           GATEWAY_URL: http://localhost:8080
+          SERVSCOPE_ADMIN_TOKEN: ${{ env.SERVSCOPE_ADMIN_TOKEN }}
       - name: logs on failure
         if: failure()
         run: docker compose logs --no-color --tail 200

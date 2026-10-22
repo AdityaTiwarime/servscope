@@ -1,7 +1,8 @@
 """Demo shop: orders. Reserves stock, then charges the card.
 
 If the charge fails or times out, the reservation is released (a compensating action), so
-a failed order never keeps stock locked away.
+a failed order never keeps stock locked away. If the charge timed out, orders also voids it
+first: the customer was told the order failed, so no money may be taken for it.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from fastapi.responses import JSONResponse
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from .faults import Faults, install
 from .schemas import Order, OrderRequest, Problem
 from .telemetry import Downstream, Exporters, setup_telemetry
 
@@ -23,6 +25,7 @@ PRICES = {"tea": 12_000, "mug": 34_900, "beans": 54_000}
 DEFAULT_PRICE = 10_000
 INVENTORY_TIMEOUT = 1.0
 PAYMENT_TIMEOUT = 2.0  # the design's "payments timeout" scenario trips this
+VOID_TIMEOUT = 1.0
 
 
 def _problem(status: int, title: str, detail: str = "") -> JSONResponse:
@@ -36,11 +39,34 @@ def create_app(
     inventory_transport: httpx.AsyncBaseTransport | None = None,
     payments_transport: httpx.AsyncBaseTransport | None = None,
     payment_timeout: float = PAYMENT_TIMEOUT,
+    faults: Faults | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Demo orders", docs_url=None, redoc_url=None)
     provider, log = setup_telemetry(app, "orders", exporters)
-    inventory = Downstream(provider, "inventory", inventory_url, inventory_transport)
-    payments = Downstream(provider, "payments", payments_url, payments_transport)
+    faults = faults or Faults()
+    install(app, faults, os.environ.get("DEMO_FAULT_TOKEN"), log)
+    # The "inventory unreachable" scenario cuts orders off from inventory at the network level.
+    cut = faults.is_cut_off
+    inventory = Downstream(provider, "inventory", inventory_url, inventory_transport, cut)
+    payments = Downstream(provider, "payments", payments_url, payments_transport, cut)
+
+    async def void_charge(order_id: str) -> None:
+        """Cancel the charge for an order the customer was told failed. Payments refuses a
+        charge that arrives after this, so the order of the two calls does not matter."""
+        try:
+            v = await payments.request(
+                "POST",
+                "/charges/void",
+                deadline_s=VOID_TIMEOUT,
+                headers={"Idempotency-Key": order_id},
+            )
+        except (TimeoutError, httpx.HTTPError):
+            # The one case left open: neither the charge nor the void got an answer. A real
+            # system would retry the void from a queue until it succeeds; noted in the README.
+            log.error("could not void the charge for order %s; it may need a refund", order_id)
+            return
+        if v.status_code == 200 and v.json().get("voided"):
+            log.warning("order %s: payments had charged after we gave up; charge voided", order_id)
 
     async def release(reservation_id: str) -> None:
         try:
@@ -107,16 +133,21 @@ def create_app(
                 Status(StatusCode.ERROR, f"payments timed out after {payment_timeout}s")
             )
             log.error(
-                "order %s failed: payments timed out after %ss, releasing stock",
+                "order %s failed: payments timed out after %ss, voiding the charge "
+                "and releasing stock",
                 order_id,
                 payment_timeout,
             )
+            await void_charge(order_id)
             await release(reservation_id)
             return _problem(504, "Payment timed out")
         except httpx.HTTPError as exc:
             span.record_exception(exc)
             span.set_attribute("error.type", "payments_unavailable")
             log.error("order %s failed: payments unavailable (%s)", order_id, type(exc).__name__)
+            # The connection may have dropped after payments got the request, so the charge
+            # may exist. A void is harmless when it doesn't.
+            await void_charge(order_id)
             await release(reservation_id)
             return _problem(503, "Payments unavailable")
 
