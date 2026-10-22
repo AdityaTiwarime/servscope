@@ -181,3 +181,15 @@ async def test_api_docs_are_off_in_production(clean_db: str) -> None:
 
     async with client_for(settings(clean_db, env="production")) as client:
         assert (await client.get("/docs")).status_code == 404
+
+
+async def test_a_refused_batch_costs_no_decoding(make_client: Any, clean_db: str) -> None:
+    """Regression (Milestone 6 flood drill): batches were decoded before a write slot was
+    taken, so a flood decoded everything, even what it was about to refuse, and starved the
+    event loop. Proof that the slot now comes first: with the only slot taken, even a body
+    that is not valid protobuf gets 503 (busy), not 400 (malformed): it was never decoded."""
+    async with make_client(write_slots=1, slot_wait_seconds=0.05) as client:
+        async with client.app.state.write_slots:
+            r = await post(client, b"this is not protobuf at all")
+        assert r.status_code == 503
+        assert (await post(client, b"this is not protobuf at all")).status_code == 400

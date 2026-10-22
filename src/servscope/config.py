@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     env: Literal["demo", "production"] = "demo"
     database_url: str = "postgresql+asyncpg://servscope:servscope@localhost:5432/servscope"
+    db_statement_timeout_ms: int = Field(default=5000, ge=50, le=60_000)
     ingest_token: SecretStr
 
     # Ingest limits. Starting values; Milestone 7 load tests may change them.

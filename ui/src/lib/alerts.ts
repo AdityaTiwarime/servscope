@@ -88,3 +88,17 @@ export function formatCountdown(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
+
+/** Is a background job alive? "stalled" means no success for three of its intervals, which is
+ *  how a job that died silently shows up (a dead alert evaluator would mean no alerts, ever). */
+export function jobStatus(
+  job: { enabled: boolean; interval_s: number; last_ok: string | null; last_failed: string | null },
+  now: number = Date.now(),
+): "off" | "running" | "failing" | "stalled" | "starting" {
+  if (!job.enabled) return "off";
+  const ok = job.last_ok ? new Date(job.last_ok).getTime() : null;
+  const failed = job.last_failed ? new Date(job.last_failed).getTime() : null;
+  if (failed !== null && (ok === null || failed > ok)) return "failing";
+  if (ok === null) return "starting";
+  return now - ok > job.interval_s * 3 * 1000 ? "stalled" : "running";
+}

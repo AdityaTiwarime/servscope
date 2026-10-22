@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -16,8 +17,10 @@ from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, InterfaceError
 
 from . import __version__, evaluator, retention
+from .admin import FailedAttempts
 from .alerts_api import router as alerts_router
 from .config import Settings, get_settings
 from .db import make_engine, make_sessionmaker
@@ -26,9 +29,26 @@ from .ingest import router as ingest_router
 from .query import ApiError
 from .query import router as query_router
 from .scenarios import FaultSwitches, make_router
-from .stats import Stats
+from .stats import HELP, Stats
 
 PROBLEM = "application/problem+json"
+log = logging.getLogger("servscope.api")
+QUERY_CANCELED = "57014"  # PostgreSQL's code for a statement cut off by statement_timeout
+
+
+def classify(exc: Exception) -> tuple[int, str, str]:
+    """What to tell the caller about an unexpected failure. Never the exception itself: it
+    can name tables, hosts or library internals. The details go to ServScope's own log."""
+    if isinstance(exc, DBAPIError):
+        sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
+            getattr(exc.orig, "__cause__", None), "sqlstate", None
+        )
+        if sqlstate == QUERY_CANCELED:
+            return 503, "Query took too long", "narrow the time window or the filters"
+        return 503, "Database unavailable", "try again shortly"
+    if isinstance(exc, OSError | TimeoutError | InterfaceError):
+        return 503, "Database unavailable", "try again shortly"  # can't connect at all
+    return 500, "Internal error", "the request ID identifies this failure in ServScope's logs"
 
 
 # The dashboard may load scripts, styles, fonts and data only from ServScope itself, and may
@@ -84,7 +104,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        engine = make_engine(settings.database_url)
+        engine = make_engine(settings.database_url, settings.db_statement_timeout_ms)
         app.state.engine = engine
         app.state.sessionmaker = make_sessionmaker(engine)
         stats = app.state.stats
@@ -110,6 +130,7 @@ def create_app(
     app.state.settings = settings
     app.state.write_slots = WriteSlots(settings.write_slots, settings.slot_wait_seconds)
     app.state.stats = Stats()
+    app.state.failed_admin_attempts = FailedAttempts()
 
     @app.exception_handler(ApiError)
     async def api_error(request: Request, exc: ApiError) -> JSONResponse:
@@ -129,8 +150,27 @@ def create_app(
         rid = request.headers.get("x-request-id", "")
         if not (0 < len(rid) <= 64 and rid.replace("-", "").isalnum()):
             rid = uuid.uuid4().hex
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # the last line of defence: no stack trace ever leaves
+            status, title, detail = classify(exc)
+            log.exception(
+                "request %s %s failed (request id %s)", request.method, request.url.path, rid
+            )
+            response = JSONResponse(
+                {"title": title, "status": status, "detail": detail, "request_id": rid},
+                status,
+                headers={"Retry-After": "5"} if status == 503 else None,
+                media_type=PROBLEM,
+            )
         response.headers["X-Request-ID"] = rid
+        # Baseline headers on every response, API included (the dashboard adds its CSP).
+        # Telemetry can be sensitive, so API answers are never stored by browsers or caches.
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     @app.get("/healthz", include_in_schema=False)
@@ -153,6 +193,51 @@ def create_app(
             "write_slots_total": slots.total,
         }
         return JSONResponse(body, status_code=200 if ready else 503)
+
+    @app.get("/api/self")
+    async def self_health(request: Request) -> dict[str, object]:
+        """ServScope watching itself (design N7): is it keeping up, is its database healthy,
+        are its background jobs alive. Counts only, nothing secret."""
+        slots: WriteSlots = request.app.state.write_slots
+        stats: Stats = request.app.state.stats
+        engine = request.app.state.engine
+        db: dict[str, object] = {"reachable": False, "latency_ms": None}
+        started = time.perf_counter()
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            db = {"reachable": True, "latency_ms": round((time.perf_counter() - started) * 1000, 2)}
+        except Exception:  # unreachable is an answer here, not an error
+            log.warning("self check: database unreachable")
+        pool = engine.pool
+        return {
+            "version": __version__,
+            "started_at": stats.started,
+            "ingest": {
+                name.removeprefix("servscope_").removesuffix("_total"): stats.counts[name]
+                for name in stats.counts | {k: 0 for k in HELP}
+            },
+            "write_slots": {"in_use": slots.in_use, "total": slots.total},
+            "database": {
+                **db,
+                "pool_in_use": pool.checkedout(),
+                "pool_size": pool.size(),
+            },
+            "jobs": {
+                "alerts": {
+                    "enabled": settings.alerts_enabled,
+                    "interval_s": settings.alert_interval_seconds,
+                    "last_ok": stats.last.get("alerts_ok"),
+                    "last_failed": stats.last.get("alerts_failed"),
+                },
+                "retention": {
+                    "enabled": settings.retention_enabled,
+                    "interval_s": settings.retention_interval_seconds,
+                    "last_ok": stats.last.get("retention_ok"),
+                    "last_failed": stats.last.get("retention_failed"),
+                },
+            },
+        }
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics(request: Request) -> PlainTextResponse:

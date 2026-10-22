@@ -85,6 +85,8 @@ async def run_forever(engine: AsyncEngine, settings: Settings, stats: Stats) -> 
             if any(deleted.values()):
                 log.info("retention removed rows: %s", deleted)
             stats.add("servscope_retention_deleted_total", sum(deleted.values()))
+            stats.mark("retention_ok")
         except Exception:  # never let one failed pass (e.g. database down) stop the loop
             log.exception("retention pass failed; will try again")
+            stats.mark("retention_failed")
         await asyncio.sleep(settings.retention_interval_seconds)

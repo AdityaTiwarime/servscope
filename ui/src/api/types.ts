@@ -230,3 +230,21 @@ export interface AuditEntry {
   action: string;
   details: Record<string, unknown>;
 }
+
+// --- Milestone 6: ServScope watching itself (GET /api/self) ---
+
+export interface JobHealth {
+  enabled: boolean;
+  interval_s: number;
+  last_ok: string | null;
+  last_failed: string | null;
+}
+
+export interface SelfHealth {
+  version: string;
+  started_at: string;
+  ingest: Record<string, number>;
+  write_slots: { in_use: number; total: number };
+  database: { reachable: boolean; latency_ms: number | null; pool_in_use: number; pool_size: number };
+  jobs: { alerts: JobHealth; retention: JobHealth };
+}

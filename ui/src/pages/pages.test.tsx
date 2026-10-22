@@ -161,3 +161,31 @@ describe("service map", () => {
     );
   });
 });
+
+describe("hostile telemetry", () => {
+  it("shows HTML in span names, attributes and logs as text, never as markup", async () => {
+    // Anyone who can send telemetry controls these strings. React escapes text, and no
+    // component uses dangerouslySetInnerHTML (ESLint forbids it); this checks the result.
+    const evil = `<img src=x onerror="window.__pwned=1"><script>window.__pwned=1</script>`;
+    const hostile: Trace = {
+      ...TRACE,
+      spans: TRACE.spans.map((s) => ({
+        ...s,
+        operation: s.span_id === "od" ? evil : s.operation,
+        attributes: s.span_id === "od" ? { "user.note": evil, [evil]: "key too" } : {},
+      })),
+    };
+    mockApi([
+      [/^\/api\/traces\//, () => json(hostile)],
+      [/^\/api\/logs$/, () => json({ logs: [{ time: "2026-10-22T08:04:44.867Z", service: "orders", severity: "ERROR",
+        message: evil, trace_id: TRACE_ID, span_id: "od", attributes: { evil } }], next_cursor: null })],
+    ]);
+    const { container } = renderAt(`/traces/${TRACE_ID}`, <TraceDetail />, "/traces/:traceId");
+
+    await userEvent.click(await screen.findByRole("button", { name: /orders <img/ }));
+    await screen.findAllByText((t) => t.includes("onerror"));
+    expect(container.querySelector("img, script")).toBeNull();
+    expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
+    expect(container.textContent).toContain("<script>window.__pwned=1</script>");
+  });
+});

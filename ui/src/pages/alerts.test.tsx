@@ -257,3 +257,42 @@ describe("alert formatting", () => {
     expect(formatCountdown(-3)).toBe("0:00");
   });
 });
+
+describe("ServScope watching itself", () => {
+  const job = (over: Partial<{ enabled: boolean; last_ok: string | null; last_failed: string | null }>) => ({
+    enabled: true, interval_s: 15, last_ok: null, last_failed: null, ...over,
+  });
+  const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000).toISOString();
+
+  it("tells a job that died silently from one that is running", async () => {
+    const { jobStatus } = await import("../lib/alerts");
+    expect(jobStatus(job({ last_ok: at(10) }))).toBe("running");
+    expect(jobStatus(job({ last_ok: at(50) }))).toBe("stalled"); // > 3 intervals with no success
+    expect(jobStatus(job({ last_ok: at(30), last_failed: at(5) }))).toBe("failing");
+    expect(jobStatus(job({ last_ok: at(5), last_failed: at(30) }))).toBe("running"); // recovered
+    expect(jobStatus(job({}))).toBe("starting");
+    expect(jobStatus(job({ enabled: false, last_ok: at(999) }))).toBe("off");
+  });
+
+  it("shows an unreachable database and a failing job plainly", async () => {
+    const { SelfHealthPanel } = await import("./Settings");
+    render(
+      <SelfHealthPanel
+        data={{
+          version: "0.1.0", started_at: at(300),
+          ingest: { spans_stored: 1200, ingest_refused: 39 },
+          write_slots: { in_use: 0, total: 8 },
+          database: { reachable: false, latency_ms: null, pool_in_use: 0, pool_size: 10 },
+          jobs: { alerts: job({ last_ok: at(60), last_failed: at(2) }), retention: job({ enabled: false }) },
+        }}
+      />,
+    );
+    const panel = screen.getByRole("region", { name: "ServScope itself" });
+    expect(within(panel).getByText("unreachable")).toBeInTheDocument();
+    expect(within(panel).getByText("failing")).toBeInTheDocument();
+    expect(within(panel).getByText("off")).toBeInTheDocument();
+    // Whole numbers: a count of 39 once rendered as "39.0" (a formatter meant for rates).
+    expect(panel).toHaveTextContent(/refused \(503\)39too late/);
+    expect(panel).toHaveTextContent("spans stored1,200");
+  });
+});

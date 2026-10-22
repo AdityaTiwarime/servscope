@@ -7,6 +7,7 @@ up (received vs stored vs duplicate vs rejected vs refused, and late data).
 from __future__ import annotations
 
 from collections import Counter
+from datetime import UTC, datetime
 
 HELP = {
     "servscope_spans_received_total": "Spans decoded from accepted export requests",
@@ -30,6 +31,13 @@ HELP = {
 class Stats:
     def __init__(self) -> None:
         self.counts: Counter[str] = Counter()
+        self.started = datetime.now(UTC)
+        # When each background job last succeeded / failed, so a job that silently stopped
+        # is visible (a dead alert evaluator would otherwise just mean "no alerts").
+        self.last: dict[str, datetime] = {}
+
+    def mark(self, event: str) -> None:
+        self.last[event] = datetime.now(UTC)
 
     def add(self, name: str, n: int = 1) -> None:
         if name not in HELP:

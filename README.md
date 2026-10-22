@@ -6,10 +6,10 @@ ServScope collects traces, metrics and logs from a small multi-service app (a de
 a gateway, orders, payments and inventory) and helps a developer find out why requests are
 slow or failing.
 
-> **Status: Milestone 5 of 8.** Alerts and incidents work end to end: break the demo shop
-> from the Demo scenarios screen, and ServScope raises an alert, links the failing requests,
-> and resolves the incident by itself once the fix has held. A scripted version of that
-> investigation runs in CI on every push.
+> **Status: Milestone 6 of 8.** Alerts and incidents work end to end, and ServScope has been
+> broken on purpose: its API, its database and the Collector stopped, ServScope killed
+> mid-write, its ingest flooded. Every failure was measured against the behaviour the design
+> promised; what fell short was fixed. Results: [docs/reliability.md](docs/reliability.md).
 
 ![Overview during an incident](docs/overview.png)
 
@@ -162,8 +162,11 @@ crosses services only through the W3C `traceparent` header.
   Collector never got a 200 and sends the batch again.
 - **Retries can't create duplicates.** `(trace_id, span_id)` is the primary key and inserts use
   `ON CONFLICT DO NOTHING`.
-- **Backpressure instead of unbounded queues.** At most 8 batches are written at once; a batch
-  that waits more than 1 s for a slot gets `503 Retry-After: 1`, which the Collector retries.
+- **Backpressure instead of unbounded queues.** At most 8 batches are processed at once; a
+  batch that waits more than 1 s for a slot gets `503 Retry-After: 1`, which the Collector
+  retries. The slot is taken *before* the batch is unzipped and decoded, so a flood is
+  turned away without costing CPU, and decoding runs in a worker thread so ServScope keeps
+  answering other requests (found by the flood drill, where `/healthz` had taken 7 s).
 - **Input limits.** Ingest token (compared in constant time), 4 MB body limit, the same limit
   on the *unzipped* size (so a small gzip bomb is refused), 8 KB of attributes per span.
 - **Secrets are scrubbed on the way in.** Password, token and authorization fields, inline
@@ -269,7 +272,8 @@ crosses services only through the W3C `traceparent` header.
 - One admin token (`SERVSCOPE_ADMIN_TOKEN`, at least 16 characters) for every change: alert
   rules, retention, acknowledging incidents, scenarios. It travels in the `Authorization`
   header, never a cookie (so another website can't make the browser send it), and is
-  compared in constant time. No token configured: every admin call is refused.
+  compared in constant time. No token configured: every admin call is refused. After 10
+  wrong tokens from one address in a minute, that address is locked out for the rest of it.
 - The dashboard keeps the token in memory only, not in browser storage; reloading the page
   locks it again. Reading stays open, like the rest of the read API.
 - Every change is written to the audit log in the same transaction as the change: who (and
@@ -293,6 +297,24 @@ payments' handler when orders timed out, which a real network never does. The te
 transport now runs each call independently of its caller, and the old code fails the new
 test (1 charge after a 504); the fixed code passes (0). On the live stack, 132 timed-out
 orders in one run produced 0 charges: all 132 were abandoned at the deadline.
+
+**When things fail (Milestone 6)**
+
+- **Errors never leak.** Every failure answers `application/problem+json` with a request ID:
+  the database down is `503 Database unavailable` with Retry-After; a query cut off by the
+  5 s statement timeout is `503 Query took too long`; anything else is a plain `500 Internal
+  error`. The details go to ServScope's own log under the same request ID.
+- **No other website can read the API.** There are no CORS headers at all: the dashboard
+  comes from ServScope itself, so no other origin is ever needed. Every response also
+  carries `nosniff`, `X-Frame-Options: DENY` and, for the API, `Cache-Control: no-store`.
+- **ServScope watches itself.** `/api/self` and the "ServScope itself" panel on Settings show
+  ingest counts and refusals, database latency and connections, and whether the alert and
+  retention jobs are still running. A job that silently died shows as "stalled", because a
+  dead alert evaluator would otherwise just look like a quiet day.
+- **Failure drills** (`scripts/failure_drills.py`, run in CI) stop, kill and flood the running
+  stack and check the outcome, ending with an exact check that the per-minute metrics still
+  equal the stored spans. CI also scans the whole git history for secrets (gitleaks) and
+  audits every pinned dependency (pip-audit, npm audit).
 
 **How calls between services are recorded**
 
@@ -353,10 +375,10 @@ npm run lint && npm run typecheck && npm test
 npx playwright test    # needs the stack running (docker compose up)
 ```
 
-CI runs all of these, then builds the Docker stack with failure scenarios on, runs the smoke
-test, runs the scripted incident (`incident-demo`), and runs the Playwright tests in a real
-browser against it, including the alert lifecycle: start a scenario from the Demo scenarios
-screen, see the alert, follow it to the failing trace.
+CI runs all of these, plus a secret scan and a dependency audit, then builds the Docker
+stack with failure scenarios on and runs, in order: the smoke test, the scripted incident
+(`incident-demo`), the Playwright tests in a real browser (including the alert lifecycle),
+and the failure drills.
 
 A local stack without Docker (as used while developing) is the same processes started by
 hand: `python -m servscope.app`, the Collector, the four `python -m demo_services.<name>`,
@@ -372,6 +394,8 @@ deploy/              OpenTelemetry Collector config
 scripts/smoke.py     End-to-end check: one checkout -> trace, logs, health and map via the API
 scripts/traffic.py   Steady demo traffic (the shop's customers)
 scripts/incident_demo.py  The scripted incident investigation, run in CI
+scripts/failure_drills.py  Breaks the running stack on purpose and checks what happens
+docs/reliability.md  Every failure and threat from the design, its test, and the measured result
 ui/                  The dashboard (React + TypeScript + Vite) and its Playwright tests
 tests/               Unit tests (no database) and integration tests (PostgreSQL)
 ```

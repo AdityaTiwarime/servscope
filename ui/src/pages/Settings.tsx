@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { admin, api, ApiError } from "../api/client";
-import type { Config, RetentionDays } from "../api/types";
+import type { Config, JobHealth, RetentionDays, SelfHealth } from "../api/types";
 import { AdminButton, useAdmin } from "../components/Admin";
 import { LockIcon } from "../components/Icons";
 import { Empty, ErrorState, Skeleton } from "../components/States";
-import { formatClock, formatMs, formatRate } from "../lib/format";
+import { jobStatus } from "../lib/alerts";
+import { formatAgo, formatClock, formatMs, formatRate } from "../lib/format";
 
 function Kv({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -143,6 +144,84 @@ function Audit() {
   );
 }
 
+const JOB_TEXT = { running: "running", starting: "starting", stalled: "stalled", failing: "failing", off: "off" } as const;
+const JOB_CLASS = { running: "healthy", starting: "no_data", stalled: "down", failing: "down", off: "no_data" } as const;
+
+function Job({ name, job }: { name: string; job: JobHealth }) {
+  const status = jobStatus(job);
+  return (
+    <Kv
+      k={name}
+      v={
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {job.last_ok ? `last ok ${formatAgo(job.last_ok)}` : "no pass yet"}
+            {status === "failing" && job.last_failed ? ` · failed ${formatAgo(job.last_failed)}` : ""}
+          </span>
+          <span className={`pill ${JOB_CLASS[status]}`}>{JOB_TEXT[status]}</span>
+        </span>
+      }
+    />
+  );
+}
+
+function Count({ label, value, bad = false, hint }: { label: string; value: number; bad?: boolean; hint: string }) {
+  return (
+    <div className="stat" title={hint}>
+      <div className="k">{label}</div>
+      <div className="v mono" style={bad && value > 0 ? { color: "var(--warn)" } : undefined}>{value.toLocaleString("en-US")}</div>
+    </div>
+  );
+}
+
+/** ServScope watching itself (design N7): keeping up, database healthy, jobs alive. */
+export function SelfHealthPanel({ data }: { data: SelfHealth }) {
+  const i = data.ingest;
+  const n = (k: string) => i[k] ?? 0;
+  return (
+    <section className="panel" aria-label="ServScope itself">
+      <div className="panel-head">
+        <h2>ServScope itself</h2>
+        <span className="hint">Since it started {formatAgo(data.started_at)} · version {data.version}</span>
+      </div>
+      <div className="panel-body self-grid">
+        <div>
+          <div className="chart-title">Telemetry received</div>
+          <div className="stat-grid">
+            <Count label="spans stored" value={n("spans_stored")} hint="new spans written to the database" />
+            <Count label="duplicates" value={n("spans_duplicate")} hint="retried deliveries, stored once" />
+            <Count label="rejected" value={n("spans_rejected")} bad hint="invalid spans skipped inside valid batches" />
+            <Count label="logs stored" value={n("logs_stored")} hint="new log lines written" />
+            <Count label="refused (503)" value={n("ingest_refused")} bad hint="batches turned away while busy or while the database was down; the Collector retries them" />
+            <Count label="too late" value={n("spans_late")} bad hint="stored but too late (over 15 min) to count in metrics" />
+          </div>
+        </div>
+        <div>
+          <div className="chart-title">Database and jobs</div>
+          <Kv
+            k="Database"
+            v={data.database.reachable ? (
+              <span className="mono">{formatMs(data.database.latency_ms ?? 0)} · {data.database.pool_in_use}/{data.database.pool_size} connections</span>
+            ) : (
+              <span className="pill down">unreachable</span>
+            )}
+          />
+          <Kv k="Write slots in use" v={<span className="mono">{data.write_slots.in_use} of {data.write_slots.total}</span>} />
+          <Job name="Alert evaluation" job={data.jobs.alerts} />
+          <Job name="Retention" job={data.jobs.retention} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SelfHealthSection() {
+  const self = useQuery({ queryKey: ["self"], queryFn: ({ signal }) => api.self(signal), refetchInterval: 5_000 });
+  if (self.isPending) return <div className="panel"><Skeleton rows={3} /></div>;
+  if (self.isError && !self.data) return <div className="panel"><ErrorState error={self.error} onRetry={() => void self.refetch()} /></div>;
+  return self.data ? <SelfHealthPanel data={self.data} /> : null;
+}
+
 function ConfigPanels({ config }: { config: Config }) {
   return (
     <div className="split">
@@ -193,6 +272,7 @@ export function Settings() {
         <div className="panel"><ErrorState error={config.error} onRetry={() => void config.refetch()} /></div>
       ) : (
         <>
+          <SelfHealthSection />
           <ConfigPanels config={config.data} />
           <Retention key={JSON.stringify(config.data.retention_days)} days={config.data.retention_days} />
           <Audit />

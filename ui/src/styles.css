@@ -361,3 +361,4 @@ table.data .chips { flex-wrap: nowrap; }
 .audit-details { max-width: 420px; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 
 :root[data-theme="light"] .btn-danger, :root[data-theme="light"] .nav-badge { color: #fff; }
+.self-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }

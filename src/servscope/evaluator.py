@@ -344,12 +344,14 @@ async def run_forever(engine: AsyncEngine, settings: Settings, stats: Stats) -> 
     while True:
         try:
             result = await run_once(engine, datetime.now().astimezone(), settle)
+            stats.mark("alerts_ok")
             if not result.skipped:
                 stats.add("servscope_alert_evaluations_total")
                 stats.add("servscope_incidents_opened_total", result.opened)
                 stats.add("servscope_incidents_resolved_total", result.resolved)
         except Exception:  # database down etc.: count it, keep the loop alive, try again
             stats.add("servscope_alert_evaluation_failures_total")
+            stats.mark("alerts_failed")
             log.exception("alert evaluation failed; will try again")
         await asyncio.sleep(settings.alert_interval_seconds)
 

@@ -1,8 +1,15 @@
 """POST /v1/traces and /v1/logs: the OTLP/HTTP endpoints the Collector exports to.
 
-Order of checks, cheapest first: token, content type, size, decompression, decoding,
-then a write slot, then one database transaction. A batch is acknowledged (200) only after
-it is committed, so the Collector re-sends anything that was not.
+Order, cheapest first: token, content type, reading the body (size-capped), then a write
+slot, and only then the CPU-heavy part (unzipping, decoding) and one database transaction.
+A batch is acknowledged (200) only after it is committed, so the Collector re-sends anything
+that was not.
+
+Why the slot comes before decoding (found by the Milestone 6 flood drill): decoding a big
+batch is CPU work. Done first, every batch in a flood was decoded, even the ones about to be
+refused, and that work ran on the event loop, so ServScope stopped answering anything else
+(/healthz took 7 s). Now a batch over capacity is refused before it costs any CPU, and the
+decoding runs in a worker thread, so the event loop stays free for other requests.
 """
 
 from __future__ import annotations
@@ -33,8 +40,17 @@ router = APIRouter()
 PROTOBUF = "application/x-protobuf"
 Decoder = Callable[[bytes, int], DecodeResult]
 
-# asyncpg allows 32,767 parameters per statement; a span row uses 14, a log row 10.
-_ROWS_PER_INSERT = 1000
+# Rows are sent as an executemany: SQLAlchemy compiles the INSERT once (cached) and batches
+# the rows itself. Building one giant INSERT ... VALUES per batch instead cost ~226 ms of CPU
+# on the event loop per 1,000 spans, against ~18 ms this way (measured in Milestone 6).
+_SPAN_INSERT = (
+    insert(Span)
+    .on_conflict_do_nothing(index_elements=["trace_id", "span_id"])
+    .returning(
+        Span.service, Span.operation, Span.kind, Span.start_ns, Span.duration_ns, Span.status_code
+    )
+)
+_LOG_INSERT = insert(Log).on_conflict_do_nothing(index_elements=["fingerprint"]).returning(Log.id)
 # gRPC status codes, which OTLP/HTTP error bodies use.
 _INVALID_ARGUMENT, _RESOURCE_EXHAUSTED, _UNAUTHENTICATED, _UNAVAILABLE = 3, 8, 16, 14
 
@@ -121,68 +137,73 @@ async def _store_spans(request: Request, rows: list[dict[str, Any]]) -> tuple[in
     so a crash between them can't leave metrics that disagree with the stored spans.
     Returns (new spans, late spans)."""
     settings = request.app.state.settings
-    new: list[dict[str, Any]] = []
     async with request.app.state.sessionmaker() as session, session.begin():
-        for i in range(0, len(rows), _ROWS_PER_INSERT):
-            stmt = (
-                insert(Span)
-                .values(rows[i : i + _ROWS_PER_INSERT])
-                .on_conflict_do_nothing(index_elements=["trace_id", "span_id"])
-                .returning(
-                    Span.service,
-                    Span.operation,
-                    Span.kind,
-                    Span.start_ns,
-                    Span.duration_ns,
-                    Span.status_code,
-                )
-            )
-            new += [dict(r._mapping) for r in await session.execute(stmt)]
+        # RETURNING with ON CONFLICT DO NOTHING returns only the rows actually inserted, so
+        # a retried batch contributes nothing to the metrics below.
+        new = [dict(r._mapping) for r in await session.execute(_SPAN_INSERT, rows)]
         result = rollups.aggregate(new, datetime.now(UTC), settings.late_metrics_after)
         await rollups.upsert(session, result.aggregates)
     return len(new), result.late
 
 
 async def _store_logs(request: Request, rows: list[dict[str, Any]]) -> int:
-    inserted = 0
     async with request.app.state.sessionmaker() as session, session.begin():
-        for i in range(0, len(rows), _ROWS_PER_INSERT):
-            stmt = (
-                insert(Log)
-                .values(rows[i : i + _ROWS_PER_INSERT])
-                .on_conflict_do_nothing(index_elements=["fingerprint"])
-                .returning(Log.id)
-            )
-            inserted += len((await session.execute(stmt)).all())
+        inserted = len((await session.execute(_LOG_INSERT, rows)).all())
     return inserted
 
 
-async def _receive(request: Request, decoder: Decoder) -> DecodeResult:
-    """Every check that comes before the database, shared by traces and logs."""
+async def _receive(request: Request) -> bytes:
+    """The cheap checks, and the size-capped body. No CPU-heavy work yet."""
     settings = request.app.state.settings
     _check_token(request)
     if request.headers.get("content-type", "").split(";")[0].strip() != PROTOBUF:
         raise IngestError(415, _INVALID_ARGUMENT, f"content-type must be {PROTOBUF}")
-    raw = await _read_body(request, settings.max_body_bytes)
-    encoding = request.headers.get("content-encoding", "")
-    body = _decompress(raw, encoding, settings.max_body_bytes)
+    return await _read_body(request, settings.max_body_bytes)
+
+
+def _decode(
+    raw: bytes, encoding: str, limit: int, attr_limit: int, decoder: Decoder
+) -> DecodeResult:
+    """Unzip and decode: plain CPU work, run in a worker thread."""
+    body = _decompress(raw, encoding, limit)
     try:
-        return decoder(body, settings.max_attributes_bytes)
+        return decoder(body, attr_limit)
     except MalformedPayload as exc:
         raise IngestError(400, _INVALID_ARGUMENT, str(exc)) from None
 
 
-async def _write(request: Request, what: str, store: Callable[[], Awaitable[Any]]) -> Any:
+async def _ingest(
+    request: Request,
+    decoder: Decoder,
+    what: str,
+    store: Callable[[list[dict[str, Any]]], Awaitable[Any]],
+) -> tuple[DecodeResult, Any]:
+    """Read, take a write slot, decode in a thread, store. Returns what was decoded and what
+    the store function returned (None when there was nothing to store)."""
+    settings = request.app.state.settings
     stats: Stats = request.app.state.stats
+    raw = await _receive(request)
+    encoding = request.headers.get("content-encoding", "")
     try:
         async with request.app.state.write_slots:
+            result = await asyncio.to_thread(
+                _decode,
+                raw,
+                encoding,
+                settings.max_body_bytes,
+                settings.max_attributes_bytes,
+                decoder,
+            )
+            if not result.rows:
+                return result, None
             try:
-                return await store()
+                return result, await store(result.rows)
             except (SQLAlchemyError, OSError) as exc:
                 log.warning("%s insert failed, asking the sender to retry: %s", what, exc)
                 raise IngestError(503, _UNAVAILABLE, "storage unavailable", 5) from None
-    except IngestError:
-        stats.add("servscope_ingest_refused_total")
+    except IngestError as err:
+        if err.http_status == 503:  # busy or storage down: the sender will retry it
+            stats.add("servscope_ingest_refused_total")
         raise
 
 
@@ -190,9 +211,11 @@ async def _write(request: Request, what: str, store: Callable[[], Awaitable[Any]
 async def export_traces(request: Request) -> Response:
     stats: Stats = request.app.state.stats
     try:
-        result = await _receive(request, decode_traces)
-        if result.rows:
-            new, late = await _write(request, "span", lambda: _store_spans(request, result.rows))
+        result, stored = await _ingest(
+            request, decode_traces, "span", lambda rows: _store_spans(request, rows)
+        )
+        if stored is not None:
+            new, late = stored
             stats.add("servscope_spans_received_total", len(result.rows))
             stats.add("servscope_spans_stored_total", new)
             stats.add("servscope_spans_duplicate_total", len(result.rows) - new)
@@ -212,9 +235,10 @@ async def export_traces(request: Request) -> Response:
 async def export_logs(request: Request) -> Response:
     stats: Stats = request.app.state.stats
     try:
-        result = await _receive(request, decode_logs)
-        if result.rows:
-            new = await _write(request, "log", lambda: _store_logs(request, result.rows))
+        result, new = await _ingest(
+            request, decode_logs, "log", lambda rows: _store_logs(request, rows)
+        )
+        if new is not None:
             stats.add("servscope_logs_received_total", len(result.rows))
             stats.add("servscope_logs_stored_total", new)
             stats.add("servscope_logs_duplicate_total", len(result.rows) - new)
