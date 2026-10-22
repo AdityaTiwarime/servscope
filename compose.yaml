@@ -1,4 +1,4 @@
-# The whole stack: `docker compose up --build`   (smoke test: `docker compose run --rm smoke`)
+# The whole stack: `docker compose up --build`   (smoke test: `docker compose run --rm --no-deps smoke`)
 #
 # Networks mirror the trust zones in the design: the demo app can reach only the Collector,
 # and only the Collector can reach ServScope. PostgreSQL has no published port. A third,
@@ -149,7 +149,7 @@ services:
     depends_on:
       gateway: { condition: service_healthy }
 
-  # The scripted incident investigation: `docker compose run --rm incident-demo`
+  # The scripted incident investigation: `docker compose run --rm --no-deps incident-demo`
   incident-demo:
     <<: *app
     restart: "no"

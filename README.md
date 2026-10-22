@@ -46,7 +46,7 @@ curl -X POST localhost:8080/checkout -H "content-type: application/json" \
 curl -X POST localhost:8080/checkout -H "content-type: application/json" \
      -d '{"items":[{"sku":"beans","qty":20},{"sku":"beans","qty":20}]}'
 
-docker compose run --rm smoke     # one checkout, checked in PostgreSQL and through the API
+docker compose run --rm --no-deps smoke     # one checkout, checked in PostgreSQL and through the API
 ```
 
 Then open the dashboard at **http://localhost:8000**, or use the same API it uses:
@@ -83,9 +83,9 @@ resolves by itself once the error rate has been back under 10% for 60 s.
 **Scripted** (this is what CI runs):
 
 ```bash
-docker compose run --rm incident-demo
+docker compose run --rm --no-deps incident-demo
 # another scenario:
-docker compose run --rm incident-demo python scripts/incident_demo.py \
+docker compose run --rm --no-deps incident-demo python scripts/incident_demo.py \
     --api http://servscope:8000 --scenario payments_slow
 ```
 

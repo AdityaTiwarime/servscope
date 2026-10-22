@@ -77,11 +77,15 @@ jobs:
           echo "SERVSCOPE_ADMIN_TOKEN=$ADMIN" >> "$GITHUB_ENV"
       - name: start the stack
         run: docker compose up --build --detach
+      - name: wait until the shop and ServScope answer
+        run: |
+          timeout 300 bash -c 'until curl -sf localhost:8080/healthz && curl -sf localhost:8000/readyz; do sleep 2; done'
+      # --no-deps: `run` must not touch the running stack. Without it, Compose may recreate
+      # the shop's containers, and the steady traffic then sees real failures mid-restart.
       - name: smoke test (checkout -> trace in PostgreSQL)
-        # `run` honours depends_on, so this waits until gateway and ServScope are healthy.
-        run: timeout 300 docker compose run --rm smoke
+        run: timeout 300 docker compose run --rm --no-deps smoke
       - name: scripted incident (payments timeout -> alert -> evidence -> fix -> resolved)
-        run: timeout 900 docker compose run --rm incident-demo
+        run: timeout 900 docker compose run --rm --no-deps incident-demo
       - uses: actions/setup-node@v5
         with:
           node-version: 22

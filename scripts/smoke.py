@@ -132,6 +132,12 @@ async def api_checks(api: str, trace_id: str, wait_seconds: float) -> dict[str, 
 
     span_ids = {span["span_id"] for span in trace.get("spans", [])}
     health = {s["service"]: s["health"] for s in services}
+    if not all(health.get(name) == "healthy" for name in SERVICES):
+        # Say why, so a failure explains itself (health covers the last 5 minutes of ALL
+        # traffic, not just this checkout).
+        for s in services:
+            errors = f"{s['errors']}/{s['requests']}"
+            print(f"  health {s['service']:<9} {s['health']:<9} errors {errors}")
     pairs = {(e["caller"], e["callee"]) for e in edges}
     return {
         "API returns the trace with all nine spans": trace.get("span_count") == 9,

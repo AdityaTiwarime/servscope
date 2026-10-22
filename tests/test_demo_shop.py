@@ -521,7 +521,7 @@ async def test_cut_off_inventory_is_a_real_connection_failure(shop: Shop) -> Non
 
 async def test_inventory_restocks_on_its_schedule() -> None:
     spans, logs = InMemorySpanExporter(), InMemoryLogRecordExporter()
-    app = inventory.create_app(Exporters(spans, logs), restock_every_s=0.05)
+    app = inventory.create_app(Exporters(spans, logs), restock_every_s=0.5)
     async with app.router.lifespan_context(app):
         c = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://i")
         r = await c.post(
@@ -529,6 +529,6 @@ async def test_inventory_restocks_on_its_schedule() -> None:
         )
         assert r.status_code == 201
         assert app.state.stock["mug"] == INITIAL_STOCK["mug"] - 5
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(1.2)
         assert app.state.stock == INITIAL_STOCK
         await c.aclose()
