@@ -18,6 +18,7 @@ processors:
 exporters:
   otlp_http/servscope:
     traces_endpoint: ${env:SERVSCOPE_INGEST_URL}/v1/traces
+    logs_endpoint: ${env:SERVSCOPE_INGEST_URL}/v1/logs
     headers:
       Authorization: Bearer ${env:SERVSCOPE_INGEST_TOKEN}
     compression: gzip
@@ -38,6 +39,10 @@ service:
       level: info
   pipelines:
     traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/servscope]
+    logs:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [otlp_http/servscope]

@@ -7,7 +7,6 @@ a failed order never keeps stock locked away.
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import uuid
 
@@ -16,13 +15,10 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from opentelemetry import trace
-from opentelemetry.sdk.trace.export import SpanExporter
 from opentelemetry.trace import Status, StatusCode
 
 from .schemas import Order, OrderRequest, Problem
-from .telemetry import setup_tracing, traced_client
-
-log = logging.getLogger("demo.orders")
+from .telemetry import Exporters, setup_telemetry, traced_client
 
 PRICES = {"tea": 12_000, "mug": 34_900, "beans": 54_000}
 DEFAULT_PRICE = 10_000
@@ -37,13 +33,13 @@ def _problem(status: int, title: str, detail: str = "") -> JSONResponse:
 def create_app(
     inventory_url: str,
     payments_url: str,
-    exporter: SpanExporter | None = None,
+    exporters: Exporters | None = None,
     inventory_transport: httpx.AsyncBaseTransport | None = None,
     payments_transport: httpx.AsyncBaseTransport | None = None,
     payment_timeout: float = PAYMENT_TIMEOUT,
 ) -> FastAPI:
     app = FastAPI(title="Demo orders", docs_url=None, redoc_url=None)
-    provider = setup_tracing(app, "orders", exporter)
+    provider, log = setup_telemetry(app, "orders", exporters)
     inventory = traced_client(provider, inventory_url, inventory_transport)
     payments = traced_client(provider, payments_url, payments_transport)
 
@@ -54,7 +50,9 @@ def create_app(
         except (TimeoutError, httpx.HTTPError):
             # Logged, not raised: the customer already has their answer. A periodic sweep of
             # stale reservations would clean this up; it is out of scope for the demo.
-            log.warning("could not release reservation %s", reservation_id)
+            log.error("could not release reservation %s; stock stays held", reservation_id)
+        else:
+            log.info("released reservation %s", reservation_id)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -78,8 +76,10 @@ def create_app(
         except (TimeoutError, httpx.HTTPError) as exc:
             span.record_exception(exc)
             span.set_attribute("error.type", "inventory_unavailable")
+            log.error("order %s failed: inventory unavailable (%s)", order_id, type(exc).__name__)
             return _problem(503, "Inventory unavailable")
         if r.status_code == 409:
+            log.warning("order %s rejected: out of stock (%s)", order_id, r.json().get("detail"))
             return _problem(409, "Out of stock", r.json().get("detail", ""))
         if r.status_code != 201:
             return _problem(502, "Inventory error", f"inventory answered {r.status_code}")
@@ -101,21 +101,29 @@ def create_app(
             span.set_status(
                 Status(StatusCode.ERROR, f"payments timed out after {payment_timeout}s")
             )
+            log.error(
+                "order %s failed: payments timed out after %ss, releasing stock",
+                order_id,
+                payment_timeout,
+            )
             await release(reservation_id)
             return _problem(504, "Payment timed out")
         except httpx.HTTPError as exc:
             span.record_exception(exc)
             span.set_attribute("error.type", "payments_unavailable")
+            log.error("order %s failed: payments unavailable (%s)", order_id, type(exc).__name__)
             await release(reservation_id)
             return _problem(503, "Payments unavailable")
 
         if p.status_code == 402:
+            log.warning("order %s rejected: card declined, releasing stock", order_id)
             await release(reservation_id)
             return _problem(402, "Card declined")
         if p.status_code not in (200, 201):
             await release(reservation_id)
             return _problem(502, "Payments error", f"payments answered {p.status_code}")
 
+        log.info("order %s placed, total %s paise", order_id, total)
         return Order(order_id=order_id, total_paise=total, charge_id=p.json()["charge_id"])
 
     return app

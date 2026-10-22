@@ -50,12 +50,13 @@ def db_url() -> str:
 async def clean_db(db_url: str) -> AsyncIterator[str]:
     engine = create_async_engine(db_url)
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE spans"))
+        await conn.execute(text("TRUNCATE spans, logs, metric_rollups"))
     await engine.dispose()
     yield db_url
 
 
 def settings(db_url: str, **overrides: Any) -> Settings:
+    overrides.setdefault("retention_enabled", False)  # tests call retention directly
     return Settings(database_url=db_url, ingest_token=SecretStr(TOKEN), **overrides)
 
 

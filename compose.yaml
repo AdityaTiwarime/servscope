@@ -141,6 +141,7 @@ services:
       - scripts/smoke.py
       - --gateway=http://gateway:8080
       - --collector=http://collector:4318
+      - --api=http://servscope:8000
       - --db=postgresql://servscope:${SERVSCOPE_DB_PASSWORD}@postgres:5432/servscope
     networks: [demo, servscope]
     depends_on:

@@ -1,22 +1,36 @@
-"""OpenTelemetry setup shared by every demo service.
+"""OpenTelemetry setup shared by every demo service: traces and logs.
 
-Each service gets its own TracerProvider (never the global one), so that all four services
-can run inside one test process and still report their own service.name.
+Each service gets its own providers (never the global ones), so that all four services can
+run inside one test process and still report their own service.name.
 
-In production, spans are exported in the background by a BatchSpanProcessor with a bounded
-queue, so a slow or missing Collector never slows a customer request: when the queue is full,
-new spans are dropped (and counted by the SDK) instead of blocking.
+In production, spans and logs are exported in the background by batch processors with
+bounded queues, so a slow or missing Collector never slows a customer request: when a queue
+is full, new records are dropped (and counted by the SDK) instead of blocking.
+
+Log lines written while a request is being handled automatically carry that request's
+trace_id and span_id. That is what lets ServScope jump from a trace to its logs.
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import sys
+from dataclasses import dataclass
 
 import httpx
 from fastapi import FastAPI
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import (
+    BatchLogRecordProcessor,
+    LogRecordExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExporter
@@ -24,30 +38,63 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcess
 BACKSTOP_TIMEOUT = httpx.Timeout(10.0)
 
 
-def setup_tracing(
-    app: FastAPI, service: str, exporter: SpanExporter | None = None
-) -> TracerProvider:
-    """Instrument `app` as `service`. Tests pass an in-memory exporter; otherwise spans go
-    to the Collector at OTEL_EXPORTER_OTLP_ENDPOINT."""
-    provider = TracerProvider(resource=Resource.create({"service.name": service}))
-    if exporter is not None:
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
+@dataclass
+class Exporters:
+    """Where telemetry goes. Tests pass in-memory exporters; None means the Collector."""
+
+    spans: SpanExporter
+    logs: LogRecordExporter
+
+
+def _endpoint(path: str) -> str:
+    base = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    return f"{base.rstrip('/')}{path}"
+
+
+def setup_telemetry(
+    app: FastAPI, service: str, exporters: Exporters | None = None
+) -> tuple[TracerProvider, logging.Logger]:
+    """Instrument `app` as `service`; returns its tracer provider and its logger."""
+    resource = Resource.create({"service.name": service})
+
+    tracer_provider = TracerProvider(resource=resource)
+    logger_provider = LoggerProvider(resource=resource)
+    if exporters is not None:
+        tracer_provider.add_span_processor(SimpleSpanProcessor(exporters.spans))
+        logger_provider.add_log_record_processor(SimpleLogRecordProcessor(exporters.logs))
     else:
-        endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
-        provider.add_span_processor(
+        tracer_provider.add_span_processor(
             BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}/v1/traces", timeout=5),
+                OTLPSpanExporter(endpoint=_endpoint("/v1/traces"), timeout=5),
+                max_queue_size=2048,
+                schedule_delay_millis=1000,
+            )
+        )
+        logger_provider.add_log_record_processor(
+            BatchLogRecordProcessor(
+                OTLPLogExporter(endpoint=_endpoint("/v1/logs"), timeout=5),
                 max_queue_size=2048,
                 schedule_delay_millis=1000,
             )
         )
     FastAPIInstrumentor.instrument_app(
         app,
-        tracer_provider=provider,
+        tracer_provider=tracer_provider,
         excluded_urls="healthz",
         exclude_spans=["receive", "send"],  # one span per request, not three
     )
-    return provider
+
+    logger = logging.getLogger(f"demo.{service}")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    # create_app can run many times in one test process: replace, don't stack, handlers.
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+    logger.addHandler(LoggingHandler(level=logging.INFO, logger_provider=logger_provider))
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(console)
+    return tracer_provider, logger
 
 
 def traced_client(

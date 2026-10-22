@@ -1,5 +1,6 @@
 """Settings come from environment variables (SERVSCOPE_*), never from code."""
 
+from datetime import timedelta
 from functools import lru_cache
 from typing import Literal
 
@@ -19,6 +20,18 @@ class Settings(BaseSettings):
     write_slots: int = Field(default=8, gt=0)
     slot_wait_seconds: float = Field(default=1.0, gt=0)
     max_attributes_bytes: int = Field(default=8 * 1024, gt=0)
+
+    # Spans that arrive more than this long after they ended are stored but not counted in
+    # metrics, because alerts may already have evaluated that minute.
+    late_metrics_after: timedelta = timedelta(minutes=15)
+
+    # Retention (design section 7). The job runs every `retention_interval_seconds`.
+    spans_retention_days: int = Field(default=7, ge=1, le=90)
+    logs_retention_days: int = Field(default=7, ge=1, le=90)
+    rollups_retention_days: int = Field(default=30, ge=1, le=365)
+    retention_interval_seconds: float = Field(default=60, gt=0)
+    retention_batch_size: int = Field(default=5000, gt=0)
+    retention_enabled: bool = True
 
 
 @lru_cache

@@ -6,9 +6,11 @@ ServScope collects traces, metrics and logs from a small multi-service app (a de
 a gateway, orders, payments and inventory) and helps a developer find out why requests are
 slow or failing.
 
-> **Status: Milestone 2 of 8.** A checkout travels through four demo services (gateway,
-> orders, inventory, payments), and the whole request is stored in ServScope as one trace.
-> Logs, metrics, the dashboard, alerts and failure scenarios arrive in later milestones.
+> **Status: Milestone 3 of 8.** A checkout travels through four demo services and is stored
+> as one trace, with each service's log lines linked to it. ServScope keeps per-minute
+> request, error and latency metrics, draws the dependency map from real calls, deletes old
+> data on a schedule, and serves all of it through a read API. The dashboard, alerts and
+> failure scenarios arrive in later milestones.
 
 ## Run it
 
@@ -34,8 +36,21 @@ curl -X POST localhost:8080/checkout -H "content-type: application/json" \
 curl -X POST localhost:8080/checkout -H "content-type: application/json" \
      -d '{"items":[{"sku":"beans","qty":20},{"sku":"beans","qty":20}]}'
 
-docker compose run --rm smoke     # one checkout with a known trace ID, checked in PostgreSQL
+docker compose run --rm smoke     # one checkout, checked in PostgreSQL and through the API
 ```
+
+Then investigate it the way the dashboard will:
+
+```bash
+curl -s localhost:8000/api/services                      # health, rate, errors, p50/p95/p99
+curl -s "localhost:8000/api/traces?status=error"         # failed requests, newest first
+curl -s localhost:8000/api/traces/<trace_id>             # waterfall, critical path, slowest span
+curl -s "localhost:8000/api/logs?trace_id=<trace_id>"    # that request's log lines
+curl -s localhost:8000/api/dependencies                  # who calls whom, with error rates
+curl -s localhost:8000/metrics                           # ServScope's own counters
+```
+
+Full parameters are on `localhost:8000/docs` in demo mode.
 
 Stop with `docker compose down` (add `--volumes` to delete the stored data).
 
@@ -83,6 +98,33 @@ crosses services only through the W3C `traceparent` header.
   that waits more than 1 s for a slot gets `503 Retry-After: 1`, which the Collector retries.
 - **Input limits.** Ingest token (compared in constant time), 4 MB body limit, the same limit
   on the *unzipped* size (so a small gzip bomb is refused), 8 KB of attributes per span.
+- **Secrets are scrubbed on the way in.** Password, token and authorization fields, inline
+  `password=...` pairs and card-number-shaped digits are replaced with `[redacted]` in spans
+  and logs before anything is stored.
+
+**Metrics, health and the read API**
+
+- **Metrics are built from server spans, in the same transaction.** Each batch updates a row
+  per (service, operation, minute) with request and error counts and a latency histogram.
+  Only *newly inserted* spans count, so a retried batch can't double-count; concurrent
+  batches add inside the `UPDATE`, in a fixed key order, so they can't overwrite each other
+  or deadlock.
+- **Percentiles come from histograms.** p50/p95/p99 are estimated from 12 fixed buckets
+  (5 ms to 10 s), so they are accurate to the bucket width. With fewer than 20 requests no
+  percentile is shown, rather than a meaningless one.
+- **Late data is stored but not counted.** A span arriving more than 15 minutes after it
+  ended is searchable but doesn't change metrics that alerts may already have read; it is
+  counted in `servscope_spans_late_total` instead.
+- **Silence is not health.** A service is `healthy`, `degraded` (5% errors or p95 at least
+  1 s), `down` (50% errors), or `no_data` when nothing has arrived for 2 minutes.
+- **The dependency map is computed from the spans** at query time (a server span whose
+  parent belongs to another service is one call), so it is right whichever batch each span
+  arrived in.
+- **Paging uses cursors, not page numbers**, so new data arriving between two pages can't
+  cause skipped or repeated results. Time windows are limited (24 h for spans and logs,
+  30 days for metrics), page size is at most 100, and errors use `application/problem+json`.
+- **Retention:** spans and logs are kept 7 days, metrics 30 days, deleted every minute in
+  batches of 5,000 rows so ingest never waits behind one huge delete.
 
 ## Known limitations
 
@@ -92,6 +134,12 @@ crosses services only through the W3C `traceparent` header.
 - Demo state (stock, charges) lives in memory and resets when a service restarts.
 - A reservation whose release fails (inventory unreachable at that moment) stays reserved;
   a periodic cleanup of stale reservations is not built.
+- The read API has no login, so ServScope must not be exposed beyond localhost or a private
+  network. Admin authentication arrives with the admin endpoints in Milestone 5.
+- Metrics count every server span, which is right because the demo samples 100% of
+  requests. With trace sampling, the counts would undercount real traffic.
+- Two identical log lines from the same span in the same nanosecond are stored once (that is
+  how a retried log batch is recognised).
 
 ## Develop
 
@@ -110,11 +158,11 @@ CI runs the same checks, then builds the Docker stack and runs the smoke test.
 ## Layout
 
 ```
-src/servscope/       ServScope API: config, OTLP decoding, ingest, database model
+src/servscope/       ServScope: OTLP ingest, rollups, read API, trace analysis, retention
 src/demo_services/   The demo shop: gateway, orders, inventory, payments + OpenTelemetry setup
 migrations/          Alembic database migrations
 deploy/              OpenTelemetry Collector config
-scripts/smoke.py     End-to-end check: one checkout -> a four-service trace in PostgreSQL
+scripts/smoke.py     End-to-end check: one checkout -> trace, logs, health and map via the API
 tests/               Unit tests (no database) and integration tests (PostgreSQL)
 ```
 

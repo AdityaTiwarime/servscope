@@ -9,17 +9,16 @@ import uuid
 import uvicorn
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
-from opentelemetry.sdk.trace.export import SpanExporter
 
 from .schemas import Problem, Reservation, ReservationRequest
-from .telemetry import setup_tracing
+from .telemetry import Exporters, setup_telemetry
 
 INITIAL_STOCK = {"tea": 100, "mug": 50, "beans": 30}
 
 
-def create_app(exporter: SpanExporter | None = None) -> FastAPI:
+def create_app(exporters: Exporters | None = None) -> FastAPI:
     app = FastAPI(title="Demo inventory", docs_url=None, redoc_url=None)
-    provider = setup_tracing(app, "inventory", exporter)
+    provider, log = setup_telemetry(app, "inventory", exporters)
     tracer = provider.get_tracer("demo.inventory")
 
     stock = dict(INITIAL_STOCK)
@@ -44,12 +43,14 @@ def create_app(exporter: SpanExporter | None = None) -> FastAPI:
                 short = [sku for sku, qty in wanted.items() if stock.get(sku, 0) < qty]
                 if short:
                     span.set_attribute("inventory.short_skus", short)
+                    log.warning("cannot reserve for order %s: short of %s", body.order_id, short)
                     problem = Problem(title="Out of stock", status=409, detail=", ".join(short))
                     return JSONResponse(problem.model_dump(), status_code=409)
                 for sku, qty in wanted.items():
                     stock[sku] -= qty
                 rid = uuid.uuid4().hex[:12]
                 reservations[rid] = wanted
+        log.info("reserved %s for order %s as %s", wanted, body.order_id, rid)
         return Reservation(reservation_id=rid)
 
     @app.delete("/reservations/{rid}", status_code=204)

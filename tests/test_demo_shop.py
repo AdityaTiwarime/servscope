@@ -16,12 +16,14 @@ from typing import Any
 import httpx
 import pytest
 from opentelemetry import context as otel_context
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanKind, StatusCode
 
 from demo_services import gateway, inventory, orders, payments
 from demo_services.inventory import INITIAL_STOCK
+from demo_services.telemetry import Exporters
 
 
 class IsolatedASGITransport(httpx.ASGITransport):
@@ -44,6 +46,7 @@ class IsolatedASGITransport(httpx.ASGITransport):
 class Shop:
     client: httpx.AsyncClient
     spans: InMemorySpanExporter
+    logs: InMemoryLogRecordExporter
     inventory: Any
     payments: Any
 
@@ -51,20 +54,21 @@ class Shop:
 async def build_shop(
     payment_timeout: float = 2.0, inventory_transport: httpx.AsyncBaseTransport | None = None
 ) -> Shop:
-    spans = InMemorySpanExporter()
-    inv = inventory.create_app(spans)
-    pay = payments.create_app(spans)
+    spans, logs = InMemorySpanExporter(), InMemoryLogRecordExporter()
+    exporters = Exporters(spans, logs)
+    inv = inventory.create_app(exporters)
+    pay = payments.create_app(exporters)
     orders_app = orders.create_app(
         "http://inventory",
         "http://payments",
-        spans,
+        exporters,
         inventory_transport=inventory_transport or IsolatedASGITransport(app=inv),
         payments_transport=IsolatedASGITransport(app=pay),
         payment_timeout=payment_timeout,
     )
-    gw = gateway.create_app("http://orders", spans, IsolatedASGITransport(app=orders_app))
+    gw = gateway.create_app("http://orders", exporters, IsolatedASGITransport(app=orders_app))
     client = httpx.AsyncClient(transport=IsolatedASGITransport(app=gw), base_url="http://gateway")
-    return Shop(client, spans, inv, pay)
+    return Shop(client, spans, logs, inv, pay)
 
 
 @pytest.fixture
@@ -251,3 +255,45 @@ async def test_bad_checkout_is_rejected_at_the_gateway(shop: Shop, body: dict[st
     assert r.status_code == 422
     services = {s.resource.attributes["service.name"] for s in shop.spans.get_finished_spans()}
     assert services == {"gateway"}  # nothing invalid travels past the front door
+
+
+def log_lines(shop: Shop) -> list[Any]:
+    return [entry.log_record for entry in shop.logs.get_finished_logs()]
+
+
+async def test_log_lines_carry_their_request_trace_and_span(shop: Shop) -> None:
+    headers, trace_id, _ = caller_headers()
+    r = await shop.client.post("/checkout", json=TEA_AND_MUG, headers=headers)
+    assert r.status_code == 201
+
+    spans = list(shop.spans.get_finished_spans())
+    span_ids = {s.context.span_id for s in spans}
+    lines = log_lines(shop)
+    assert lines, "the services wrote no logs"
+    for line in lines:
+        assert hexid(line.trace_id, 32) == trace_id  # every line belongs to this checkout
+        assert line.span_id in span_ids  # ...and to a span that exists in it
+    messages = [str(line.body) for line in lines]
+    assert any("placed" in m for m in messages)
+    assert any("charged" in m for m in messages)
+    # The service a line came from travels on its resource, checked end to end in smoke.py.
+
+
+async def test_payment_timeout_is_explained_in_the_logs() -> None:
+    s = await build_shop(payment_timeout=0.2)
+    s.payments.state.delay_seconds = 1.0
+    await s.client.post("/checkout", json=TEA_AND_MUG)
+    await s.client.aclose()
+    errors = [str(line.body) for line in log_lines(s) if line.severity_text == "ERROR"]
+    assert any("payments timed out after 0.2s" in m for m in errors)
+    assert any("released reservation" in str(line.body) for line in log_lines(s))
+
+
+async def test_no_card_token_ever_appears_in_logs(shop: Shop) -> None:
+    await shop.client.post("/checkout", json={**TEA_AND_MUG, "card_token": "tok_demo_declined"})
+    await shop.client.post("/checkout", json={**TEA_AND_MUG, "card_token": "tok_demo_visa"})
+    lines = log_lines(shop)
+    assert any("declined" in str(line.body) for line in lines)
+    for line in lines:
+        assert "tok_demo" not in str(line.body)
+        assert "tok_demo" not in str(dict(line.attributes or {}))

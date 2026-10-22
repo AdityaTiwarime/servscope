@@ -1,21 +1,35 @@
-"""The ServScope API process."""
+"""The ServScope API process: OTLP ingest, the read API, and the retention job."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import text
 
-from . import __version__
+from . import __version__, retention
 from .config import Settings, get_settings
 from .db import make_engine, make_sessionmaker
 from .ingest import WriteSlots
 from .ingest import router as ingest_router
+from .query import ApiError
+from .query import router as query_router
+from .stats import Stats
+
+PROBLEM = "application/problem+json"
+
+
+def problem(status: int, title: str, detail: str = "") -> JSONResponse:
+    return JSONResponse(
+        {"title": title, "status": status, "detail": detail}, status, media_type=PROBLEM
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -26,7 +40,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = make_engine(settings.database_url)
         app.state.engine = engine
         app.state.sessionmaker = make_sessionmaker(engine)
+        task = None
+        if settings.retention_enabled:
+            task = asyncio.create_task(retention.run_forever(engine, settings, app.state.stats))
         yield
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await engine.dispose()
 
     # No interactive docs in production: they advertise every endpoint to whoever finds the port.
@@ -36,6 +57,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.write_slots = WriteSlots(settings.write_slots, settings.slot_wait_seconds)
+    app.state.stats = Stats()
+
+    @app.exception_handler(ApiError)
+    async def api_error(request: Request, exc: ApiError) -> JSONResponse:
+        return problem(exc.status, exc.title, exc.detail)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # Say which parameter is wrong, without echoing the submitted value back.
+        fields = sorted({".".join(str(p) for p in e["loc"][1:]) for e in exc.errors()})
+        return problem(422, "Invalid request", "check: " + ", ".join(fields))
 
     @app.middleware("http")
     async def request_id(
@@ -70,7 +102,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         return JSONResponse(body, status_code=200 if ready else 503)
 
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics(request: Request) -> PlainTextResponse:
+        slots: WriteSlots = request.app.state.write_slots
+        body = request.app.state.stats.render(
+            {
+                "servscope_write_slots_in_use": slots.in_use,
+                "servscope_write_slots_total": slots.total,
+            }
+        )
+        return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
+
     app.include_router(ingest_router)
+    app.include_router(query_router)
     return app
 
 

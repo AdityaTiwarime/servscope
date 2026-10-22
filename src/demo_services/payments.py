@@ -13,17 +13,16 @@ import uuid
 import uvicorn
 from fastapi import FastAPI, Header
 from fastapi.responses import JSONResponse
-from opentelemetry.sdk.trace.export import SpanExporter
 
 from .schemas import Charge, ChargeRequest, Problem
-from .telemetry import setup_tracing
+from .telemetry import Exporters, setup_telemetry
 
 DECLINED_TOKEN = "tok_demo_declined"  # noqa: S105  # a demo constant, not a secret
 
 
-def create_app(exporter: SpanExporter | None = None) -> FastAPI:
+def create_app(exporters: Exporters | None = None) -> FastAPI:
     app = FastAPI(title="Demo payments", docs_url=None, redoc_url=None)
-    provider = setup_tracing(app, "payments", exporter)
+    provider, log = setup_telemetry(app, "payments", exporters)
     tracer = provider.get_tracer("demo.payments")
 
     charges: dict[str, Charge] = {}  # idempotency key -> charge
@@ -47,6 +46,7 @@ def create_app(exporter: SpanExporter | None = None) -> FastAPI:
         async with lock:  # two retries racing with one key must still charge once
             if idempotency_key in charges:
                 done = charges[idempotency_key]
+                log.info("repeat charge for order %s answered from the first one", body.order_id)
                 return JSONResponse(
                     done.model_dump(), status_code=200, headers={"Idempotent-Replay": "true"}
                 )
@@ -56,6 +56,8 @@ def create_app(exporter: SpanExporter | None = None) -> FastAPI:
                 span.set_attribute("payment.amount_paise", body.amount_paise)
                 if body.card_token == DECLINED_TOKEN:
                     span.set_attribute("payment.declined", True)
+                    # The order and amount, never the card token.
+                    log.warning("card declined for order %s", body.order_id)
                     problem = Problem(title="Card declined", status=402)
                     return JSONResponse(problem.model_dump(), status_code=402)
                 result = Charge(
@@ -65,6 +67,7 @@ def create_app(exporter: SpanExporter | None = None) -> FastAPI:
                 )
                 charges[idempotency_key] = result
                 app.state.charge_count += 1
+                log.info("charged %s paise for order %s", body.amount_paise, body.order_id)
         return result
 
     return app

@@ -13,10 +13,9 @@ import httpx
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from opentelemetry.sdk.trace.export import SpanExporter
 
 from .schemas import Checkout, Order, Problem
-from .telemetry import setup_tracing, traced_client
+from .telemetry import Exporters, setup_telemetry, traced_client
 
 # Longer than orders' own worst case (1 s inventory + 2 s payments + 1 s release), so the
 # gateway hears orders' specific error instead of timing out first.
@@ -26,11 +25,11 @@ PASSED_THROUGH = {402, 409, 503, 504}
 
 def create_app(
     orders_url: str,
-    exporter: SpanExporter | None = None,
+    exporters: Exporters | None = None,
     orders_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Demo gateway", docs_url=None, redoc_url=None)
-    provider = setup_tracing(app, "gateway", exporter)
+    provider, log = setup_telemetry(app, "gateway", exporters)
     orders = traced_client(provider, orders_url, orders_transport)
 
     @app.get("/healthz")
@@ -43,13 +42,16 @@ def create_app(
             async with asyncio.timeout(ORDERS_TIMEOUT):
                 r = await orders.post("/orders", json=body.model_dump())
         except TimeoutError:
+            log.error("checkout failed: orders did not answer within %ss", ORDERS_TIMEOUT)
             return JSONResponse(Problem(title="Orders timed out", status=504).model_dump(), 504)
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            log.error("checkout failed: orders unreachable (%s)", type(exc).__name__)
             return JSONResponse(Problem(title="Orders unavailable", status=503).model_dump(), 503)
 
         if r.status_code == 201:
             return Order.model_validate(r.json())
         if r.status_code in PASSED_THROUGH:
+            log.warning("checkout not completed: orders answered %s", r.status_code)
             return JSONResponse(r.json(), status_code=r.status_code)
         problem = Problem(
             title="Order failed", status=502, detail=f"orders answered {r.status_code}"
