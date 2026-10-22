@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SpanView, TraceDetail as Trace } from "../api/types";
+import { ServiceMap } from "../components/ServiceMap";
 import { Overview } from "./Overview";
 import { TraceDetail } from "./TraceDetail";
 
@@ -139,5 +140,24 @@ describe("overview", () => {
     renderAt("/", <Overview />, "/");
     expect(await screen.findByText(/inventory sent nothing in the last 2 minutes/)).toBeInTheDocument();
     expect(screen.getAllByText("no data").length).toBeGreaterThan(0);
+  });
+});
+
+describe("service map", () => {
+  it("names every call for screen readers, marking the failing ones", () => {
+    // Regression: with a failing call, the label used to list ONLY the failures.
+    render(
+      <ServiceMap
+        health={{ gateway: "degraded", orders: "healthy", payments: "healthy" }}
+        edges={[
+          { caller: "gateway", callee: "orders", calls: 100, errors: 25, error_rate: 0.25 },
+          { caller: "orders", callee: "payments", calls: 120, errors: 18, error_rate: 0.15 },
+        ]}
+      />,
+    );
+    const map = screen.getByRole("img", { name: /^Service map/ });
+    expect(map).toHaveAccessibleName(
+      "Service map, 1 failing: gateway calls orders (failing, 25% errors), orders calls payments.",
+    );
   });
 });

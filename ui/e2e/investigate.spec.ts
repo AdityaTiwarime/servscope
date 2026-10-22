@@ -62,7 +62,7 @@ test("the overview shows every service and the calls between them", async ({ pag
   for (const name of ["gateway", "orders", "inventory", "payments"]) {
     await expect(services.getByRole("link", { name, exact: true })).toBeVisible({ timeout: 30_000 });
   }
-  await expect(page.getByRole("img", { name: /orders calls payments|orders to payments/ })).toBeVisible();
+  await expect(page.getByRole("img", { name: /orders calls payments/ })).toBeVisible();
 });
 
 test("an unknown trace ID gets a helpful page, not a crash", async ({ page }) => {

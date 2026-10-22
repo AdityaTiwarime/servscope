@@ -13,8 +13,15 @@ interface Incident {
 }
 
 async function newIncident(request: APIRequestContext, since: number): Promise<Incident | undefined> {
-  const r = await request.get(`${API}/api/incidents?state=open`);
-  const { incidents } = (await r.json()) as { incidents: Incident[] };
+  let incidents: Incident[];
+  try {
+    // A poll can land just as the server closes an idle keep-alive connection; that is the
+    // network, not an answer, so it counts as "not yet" and the poll asks again.
+    const r = await request.get(`${API}/api/incidents?state=open`);
+    ({ incidents } = (await r.json()) as { incidents: Incident[] });
+  } catch {
+    return undefined;
+  }
   return incidents.find(
     (i) => i.rule_name === "Checkout errors" && i.service === "gateway" && new Date(i.opened_at).getTime() >= since,
   );
@@ -39,7 +46,7 @@ test("a payments timeout raises an alert whose evidence leads to the failing req
     // 2. The alert fires (settle 30 s + for 30 s + up to one 15 s cycle, after errors start).
     let incident: Incident | undefined;
     await expect
-      .poll(async () => (incident = await newIncident(request, since)) !== undefined, { timeout: 240_000, intervals: [5_000] })
+      .poll(async () => (incident = await newIncident(request, since)) !== undefined, { timeout: 240_000, intervals: [3_000] })
       .toBe(true);
     if (!incident) throw new Error("unreachable");
 

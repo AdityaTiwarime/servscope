@@ -12,9 +12,12 @@ export function ServiceMap({ edges, health }: { edges: Edge[]; health: Record<st
   const width = layout.width + PAD * 2;
   const height = layout.height + PAD * 2;
   const failing = edges.filter((e) => e.error_rate >= 0.2);
-  const label = failing.length
-    ? `Service map. Failing calls: ${failing.map((e) => `${e.caller} to ${e.callee}, ${formatRate(e.error_rate)} errors`).join("; ")}.`
-    : `Service map: ${edges.map((e) => `${e.caller} calls ${e.callee}`).join(", ") || "no calls in this window"}.`;
+  // Every call is named, failing or not: a screen-reader user gets the whole map, with the
+  // failing calls marked, not only the failures.
+  const calls = edges.map((e) =>
+    e.error_rate >= 0.2 ? `${e.caller} calls ${e.callee} (failing, ${formatRate(e.error_rate)} errors)` : `${e.caller} calls ${e.callee}`,
+  );
+  const label = `Service map${failing.length ? `, ${failing.length} failing` : ""}: ${calls.join(", ") || "no calls in this window"}.`;
 
   return (
     <div style={{ overflowX: "auto" }}>
