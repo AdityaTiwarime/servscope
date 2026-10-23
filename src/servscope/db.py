@@ -1,4 +1,4 @@
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 
 def make_engine(url: str, statement_timeout_ms: int = 5000) -> AsyncEngine:
@@ -14,7 +14,3 @@ def make_engine(url: str, statement_timeout_ms: int = 5000) -> AsyncEngine:
             "timeout": 3,
         },
     )
-
-
-def make_sessionmaker(engine: AsyncEngine) -> async_sessionmaker:  # type: ignore[type-arg]
-    return async_sessionmaker(engine, expire_on_commit=False)

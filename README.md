@@ -6,10 +6,12 @@ ServScope collects traces, metrics and logs from a small multi-service app (a de
 a gateway, orders, payments and inventory) and helps a developer find out why requests are
 slow or failing.
 
-> **Status: Milestone 6 of 8.** Alerts and incidents work end to end, and ServScope has been
-> broken on purpose: its API, its database and the Collector stopped, ServScope killed
-> mid-write, its ingest flooded. Every failure was measured against the behaviour the design
-> promised; what fell short was fixed. Results: [docs/reliability.md](docs/reliability.md).
+> **Status: Milestone 7 of 8.** Alerts and incidents work end to end; ServScope has been
+> broken on purpose and measured against what the design promised
+> ([docs/reliability.md](docs/reliability.md)); and it has been load-tested. One profiled
+> change raised ingest from about 3,400 to about 17,000 spans/s on one CPU core, with export
+> latency at 4 concurrent exports down from 210 to 41 ms (p50). Method, hardware and every
+> number: [docs/performance.md](docs/performance.md).
 
 ![Overview during an incident](docs/overview.png)
 
@@ -396,6 +398,8 @@ scripts/traffic.py   Steady demo traffic (the shop's customers)
 scripts/incident_demo.py  The scripted incident investigation, run in CI
 scripts/failure_drills.py  Breaks the running stack on purpose and checks what happens
 docs/reliability.md  Every failure and threat from the design, its test, and the measured result
+docs/performance.md  Load tests: method, hardware, results before and after the optimisation
+perf/                Locust workloads, the benchmark runner, seed data and raw results (JSON)
 ui/                  The dashboard (React + TypeScript + Vite) and its Playwright tests
 tests/               Unit tests (no database) and integration tests (PostgreSQL)
 ```

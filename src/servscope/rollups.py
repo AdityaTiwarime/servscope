@@ -25,10 +25,10 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from .latency import bucket_index, empty_buckets
-from .models import MetricRollup
+from .models import Base
 from .otlp import ns_to_datetime
 
 SPAN_KIND_SERVER = 2
@@ -77,7 +77,7 @@ _ADD_BUCKETS = text(
 )
 
 
-async def upsert(session: AsyncSession, aggregates: dict[Key, Aggregate]) -> None:
+async def upsert(conn: AsyncConnection, aggregates: dict[Key, Aggregate]) -> None:
     if not aggregates:
         return
     rows = [
@@ -91,13 +91,14 @@ async def upsert(session: AsyncSession, aggregates: dict[Key, Aggregate]) -> Non
         }
         for (service, operation, minute), agg in sorted(aggregates.items())  # lock order
     ]
-    stmt = insert(MetricRollup).values(rows)
+    table = Base.metadata.tables["metric_rollups"]
+    stmt = insert(table).values(rows)
     stmt = stmt.on_conflict_do_update(
         index_elements=["service", "operation", "minute"],
         set_={
-            "request_count": MetricRollup.request_count + stmt.excluded.request_count,
-            "error_count": MetricRollup.error_count + stmt.excluded.error_count,
+            "request_count": table.c.request_count + stmt.excluded.request_count,
+            "error_count": table.c.error_count + stmt.excluded.error_count,
             "latency_buckets": _ADD_BUCKETS,
         },
     )
-    await session.execute(stmt)
+    await conn.execute(stmt)

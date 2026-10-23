@@ -30,6 +30,7 @@ dev = [
     "pytest-asyncio==1.4.0",
     "ruff==0.17.1",
     "mypy==2.4.0",
+    "locust==2.47.0",
 ]
 
 [build-system]
@@ -58,6 +59,7 @@ ignore = ["S101"]  # assert is fine in tests
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "S603"]
 "scripts/**" = ["S603", "S607"]
+"perf/**" = ["S311", "S603", "S607", "S324", "E501", "RUF001"]  # random traffic; Markdown tables in report.py
 
 [tool.mypy]
 python_version = "3.12"

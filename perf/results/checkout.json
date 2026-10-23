@@ -1,0 +1,197 @@
+{
+  "workload": "checkout",
+  "label": "demo shop checkout",
+  "seconds": 45,
+  "runs_per_level": 3,
+  "started": "2026-10-22T18:55:42+0000",
+  "machine": {
+    "cpus": 2,
+    "memory_gb": 7.8
+  },
+  "levels": [
+    {
+      "users": 10,
+      "runs": [
+        {
+          "users": 10,
+          "wall_s": 45.6,
+          "valid": true,
+          "requests": 450,
+          "failures": 0,
+          "rps": 10.214550076079975,
+          "fail_rps": 0.0,
+          "p50_ms": 55.0,
+          "p95_ms": 72.0,
+          "p99_ms": 86.0,
+          "max_ms": 91.61352199998873,
+          "endpoints": {
+            "checkout": {
+              "requests": 450,
+              "failures": 0,
+              "rps": 10.214550076079975,
+              "fail_rps": 0.0,
+              "p50_ms": 55.0,
+              "p95_ms": 72.0,
+              "p99_ms": 86.0,
+              "max_ms": 91.61352199998873
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 1.2,
+          "servscope_rss_max_mb": 96.1,
+          "postgres_cpu_avg": 0.5
+        },
+        {
+          "users": 10,
+          "wall_s": 45.5,
+          "valid": true,
+          "requests": 445,
+          "failures": 0,
+          "rps": 10.100323703403307,
+          "fail_rps": 0.0,
+          "p50_ms": 55.0,
+          "p95_ms": 73.0,
+          "p99_ms": 86.0,
+          "max_ms": 96.59415399983118,
+          "endpoints": {
+            "checkout": {
+              "requests": 445,
+              "failures": 0,
+              "rps": 10.100323703403307,
+              "fail_rps": 0.0,
+              "p50_ms": 55.0,
+              "p95_ms": 73.0,
+              "p99_ms": 86.0,
+              "max_ms": 96.59415399983118
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 1.3,
+          "servscope_rss_max_mb": 96.1,
+          "postgres_cpu_avg": 0.5
+        },
+        {
+          "users": 10,
+          "wall_s": 45.5,
+          "valid": true,
+          "requests": 450,
+          "failures": 0,
+          "rps": 10.210573417684781,
+          "fail_rps": 0.0,
+          "p50_ms": 53.0,
+          "p95_ms": 82.0,
+          "p99_ms": 94.0,
+          "max_ms": 104.73097299973233,
+          "endpoints": {
+            "checkout": {
+              "requests": 450,
+              "failures": 0,
+              "rps": 10.210573417684781,
+              "fail_rps": 0.0,
+              "p50_ms": 53.0,
+              "p95_ms": 82.0,
+              "p99_ms": 94.0,
+              "max_ms": 104.73097299973233
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 1.2,
+          "servscope_rss_max_mb": 96.1,
+          "postgres_cpu_avg": 0.6
+        }
+      ]
+    },
+    {
+      "users": 30,
+      "runs": [
+        {
+          "users": 30,
+          "wall_s": 45.5,
+          "valid": true,
+          "requests": 1322,
+          "failures": 0,
+          "rps": 29.993070102167774,
+          "fail_rps": 0.0,
+          "p50_ms": 160.0,
+          "p95_ms": 220.0,
+          "p99_ms": 250.0,
+          "max_ms": 271.4729890003582,
+          "endpoints": {
+            "checkout": {
+              "requests": 1322,
+              "failures": 0,
+              "rps": 29.993070102167774,
+              "fail_rps": 0.0,
+              "p50_ms": 160.0,
+              "p95_ms": 220.0,
+              "p99_ms": 250.0,
+              "max_ms": 271.4729890003582
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 2.7,
+          "servscope_rss_max_mb": 107.9,
+          "postgres_cpu_avg": 1.5
+        },
+        {
+          "users": 30,
+          "wall_s": 45.6,
+          "valid": true,
+          "requests": 1355,
+          "failures": 0,
+          "rps": 30.05489471295263,
+          "fail_rps": 0.0,
+          "p50_ms": 170.0,
+          "p95_ms": 230.0,
+          "p99_ms": 260.0,
+          "max_ms": 286.1458530001073,
+          "endpoints": {
+            "checkout": {
+              "requests": 1355,
+              "failures": 0,
+              "rps": 30.05489471295263,
+              "fail_rps": 0.0,
+              "p50_ms": 170.0,
+              "p95_ms": 230.0,
+              "p99_ms": 260.0,
+              "max_ms": 286.1458530001073
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 2.5,
+          "servscope_rss_max_mb": 113.8,
+          "postgres_cpu_avg": 1.6
+        },
+        {
+          "users": 30,
+          "wall_s": 45.7,
+          "valid": true,
+          "requests": 1350,
+          "failures": 0,
+          "rps": 30.541157595719138,
+          "fail_rps": 0.0,
+          "p50_ms": 160.0,
+          "p95_ms": 220.0,
+          "p99_ms": 250.0,
+          "max_ms": 261.7529529998137,
+          "endpoints": {
+            "checkout": {
+              "requests": 1350,
+              "failures": 0,
+              "rps": 30.541157595719138,
+              "fail_rps": 0.0,
+              "p50_ms": 160.0,
+              "p95_ms": 220.0,
+              "p99_ms": 250.0,
+              "max_ms": 261.7529529998137
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 2.5,
+          "servscope_rss_max_mb": 119.2,
+          "postgres_cpu_avg": 1.7
+        }
+      ]
+    }
+  ]
+}

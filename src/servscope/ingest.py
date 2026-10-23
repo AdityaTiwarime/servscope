@@ -30,7 +30,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from . import rollups
-from .models import Log, Span
+from .models import Base
 from .otlp import DecodeResult, MalformedPayload, decode_logs, decode_traces
 from .stats import Stats
 
@@ -43,14 +43,23 @@ Decoder = Callable[[bytes, int], DecodeResult]
 # Rows are sent as an executemany: SQLAlchemy compiles the INSERT once (cached) and batches
 # the rows itself. Building one giant INSERT ... VALUES per batch instead cost ~226 ms of CPU
 # on the event loop per 1,000 spans, against ~18 ms this way (measured in Milestone 6).
+#
+# Core, not the ORM (Milestone 7): these are plain rows, and an ORM Session's bulk insert
+# does per-row bookkeeping on top. Profiling saturated ingest showed 44% of ServScope's CPU
+# in that ORM path; the same INSERT on a Core connection skips it.
+SPANS = Base.metadata.tables["spans"]
+LOGS = Base.metadata.tables["logs"]
 _SPAN_INSERT = (
-    insert(Span)
+    insert(SPANS)
     .on_conflict_do_nothing(index_elements=["trace_id", "span_id"])
     .returning(
-        Span.service, Span.operation, Span.kind, Span.start_ns, Span.duration_ns, Span.status_code
+        SPANS.c.service, SPANS.c.operation, SPANS.c.kind, SPANS.c.start_ns,
+        SPANS.c.duration_ns, SPANS.c.status_code,
     )
+)  # fmt: skip
+_LOG_INSERT = (
+    insert(LOGS).on_conflict_do_nothing(index_elements=["fingerprint"]).returning(LOGS.c.id)
 )
-_LOG_INSERT = insert(Log).on_conflict_do_nothing(index_elements=["fingerprint"]).returning(Log.id)
 # gRPC status codes, which OTLP/HTTP error bodies use.
 _INVALID_ARGUMENT, _RESOURCE_EXHAUSTED, _UNAUTHENTICATED, _UNAVAILABLE = 3, 8, 16, 14
 
@@ -137,18 +146,18 @@ async def _store_spans(request: Request, rows: list[dict[str, Any]]) -> tuple[in
     so a crash between them can't leave metrics that disagree with the stored spans.
     Returns (new spans, late spans)."""
     settings = request.app.state.settings
-    async with request.app.state.sessionmaker() as session, session.begin():
+    async with request.app.state.engine.begin() as conn:
         # RETURNING with ON CONFLICT DO NOTHING returns only the rows actually inserted, so
         # a retried batch contributes nothing to the metrics below.
-        new = [dict(r._mapping) for r in await session.execute(_SPAN_INSERT, rows)]
+        new = [dict(r._mapping) for r in await conn.execute(_SPAN_INSERT, rows)]
         result = rollups.aggregate(new, datetime.now(UTC), settings.late_metrics_after)
-        await rollups.upsert(session, result.aggregates)
+        await rollups.upsert(conn, result.aggregates)
     return len(new), result.late
 
 
 async def _store_logs(request: Request, rows: list[dict[str, Any]]) -> int:
-    async with request.app.state.sessionmaker() as session, session.begin():
-        inserted = len((await session.execute(_LOG_INSERT, rows)).all())
+    async with request.app.state.engine.begin() as conn:
+        inserted = len((await conn.execute(_LOG_INSERT, rows)).all())
     return inserted
 
 

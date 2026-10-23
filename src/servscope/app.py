@@ -23,7 +23,7 @@ from . import __version__, evaluator, retention
 from .admin import FailedAttempts
 from .alerts_api import router as alerts_router
 from .config import Settings, get_settings
-from .db import make_engine, make_sessionmaker
+from .db import make_engine
 from .ingest import WriteSlots
 from .ingest import router as ingest_router
 from .query import ApiError
@@ -106,7 +106,6 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = make_engine(settings.database_url, settings.db_statement_timeout_ms)
         app.state.engine = engine
-        app.state.sessionmaker = make_sessionmaker(engine)
         stats = app.state.stats
         tasks = []
         if settings.retention_enabled:

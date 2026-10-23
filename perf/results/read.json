@@ -1,0 +1,737 @@
+{
+  "workload": "read",
+  "label": "dashboard reads, 24 h seeded",
+  "seconds": 45,
+  "runs_per_level": 3,
+  "started": "2026-10-22T19:04:32+0000",
+  "machine": {
+    "cpus": 2,
+    "memory_gb": 7.8
+  },
+  "levels": [
+    {
+      "users": 10,
+      "runs": [
+        {
+          "users": 10,
+          "wall_s": 45.5,
+          "valid": true,
+          "requests": 908,
+          "failures": 0,
+          "rps": 20.632686298989455,
+          "fail_rps": 0.0,
+          "p50_ms": 7.0,
+          "p95_ms": 120.0,
+          "p99_ms": 360.0,
+          "max_ms": 699.9861399999645,
+          "endpoints": {
+            "dependencies 15m": {
+              "requests": 106,
+              "failures": 0,
+              "rps": 2.408661616401853,
+              "fail_rps": 0.0,
+              "p50_ms": 25.0,
+              "p95_ms": 110.0,
+              "p99_ms": 140.0,
+              "max_ms": 138.43992100009928
+            },
+            "failing traces 15m": {
+              "requests": 106,
+              "failures": 0,
+              "rps": 2.408661616401853,
+              "fail_rps": 0.0,
+              "p50_ms": 12.0,
+              "p95_ms": 44.0,
+              "p99_ms": 51.0,
+              "max_ms": 70.9880230001545
+            },
+            "log search 1h": {
+              "requests": 18,
+              "failures": 0,
+              "rps": 0.4090180103323901,
+              "fail_rps": 0.0,
+              "p50_ms": 6.0,
+              "p95_ms": 130.0,
+              "p99_ms": 130.0,
+              "max_ms": 126.56423300040842
+            },
+            "logs of a trace": {
+              "requests": 52,
+              "failures": 0,
+              "rps": 1.1816075854046826,
+              "fail_rps": 0.0,
+              "p50_ms": 5.0,
+              "p95_ms": 10.0,
+              "p99_ms": 11.0,
+              "max_ms": 11.323483000069245
+            },
+            "metrics 15m": {
+              "requests": 424,
+              "failures": 0,
+              "rps": 9.634646465607412,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 14.0,
+              "p99_ms": 20.0,
+              "max_ms": 21.60495499992976
+            },
+            "metrics 24h": {
+              "requests": 13,
+              "failures": 0,
+              "rps": 0.29540189635117065,
+              "fail_rps": 0.0,
+              "p50_ms": 37.0,
+              "p95_ms": 140.0,
+              "p99_ms": 140.0,
+              "max_ms": 144.60065200000827
+            },
+            "services 15m": {
+              "requests": 106,
+              "failures": 0,
+              "rps": 2.408661616401853,
+              "fail_rps": 0.0,
+              "p50_ms": 8.0,
+              "p95_ms": 32.0,
+              "p99_ms": 37.0,
+              "max_ms": 39.06052099955559
+            },
+            "services 24h": {
+              "requests": 13,
+              "failures": 0,
+              "rps": 0.29540189635117065,
+              "fail_rps": 0.0,
+              "p50_ms": 31.0,
+              "p95_ms": 50.0,
+              "p99_ms": 50.0,
+              "max_ms": 50.16563800018048
+            },
+            "trace detail": {
+              "requests": 52,
+              "failures": 0,
+              "rps": 1.1816075854046826,
+              "fail_rps": 0.0,
+              "p50_ms": 200.0,
+              "p95_ms": 540.0,
+              "p99_ms": 650.0,
+              "max_ms": 648.1406819998483
+            },
+            "trace search 1h": {
+              "requests": 18,
+              "failures": 0,
+              "rps": 0.4090180103323901,
+              "fail_rps": 0.0,
+              "p50_ms": 21.0,
+              "p95_ms": 700.0,
+              "p99_ms": 700.0,
+              "max_ms": 699.9861399999645
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 5.3,
+          "servscope_rss_max_mb": 86.3,
+          "postgres_cpu_avg": 9.8
+        },
+        {
+          "users": 10,
+          "wall_s": 45.4,
+          "valid": true,
+          "requests": 899,
+          "failures": 0,
+          "rps": 20.404818496608744,
+          "fail_rps": 0.0,
+          "p50_ms": 6.0,
+          "p95_ms": 46.0,
+          "p99_ms": 240.0,
+          "max_ms": 441.5519970002606,
+          "endpoints": {
+            "dependencies 15m": {
+              "requests": 102,
+              "failures": 0,
+              "rps": 2.3151184501157864,
+              "fail_rps": 0.0,
+              "p50_ms": 27.0,
+              "p95_ms": 42.0,
+              "p99_ms": 66.0,
+              "max_ms": 84.71074799990674
+            },
+            "failing traces 15m": {
+              "requests": 102,
+              "failures": 0,
+              "rps": 2.3151184501157864,
+              "fail_rps": 0.0,
+              "p50_ms": 10.0,
+              "p95_ms": 22.0,
+              "p99_ms": 27.0,
+              "max_ms": 27.900927999780833
+            },
+            "log search 1h": {
+              "requests": 24,
+              "failures": 0,
+              "rps": 0.5447337529684203,
+              "fail_rps": 0.0,
+              "p50_ms": 6.0,
+              "p95_ms": 37.0,
+              "p99_ms": 43.0,
+              "max_ms": 42.567483999846445
+            },
+            "logs of a trace": {
+              "requests": 57,
+              "failures": 0,
+              "rps": 1.2937426632999984,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 8.0,
+              "p99_ms": 10.0,
+              "max_ms": 10.445587000049272
+            },
+            "metrics 15m": {
+              "requests": 407,
+              "failures": 0,
+              "rps": 9.237776560756128,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 8.0,
+              "p99_ms": 12.0,
+              "max_ms": 21.24428299975989
+            },
+            "metrics 24h": {
+              "requests": 14,
+              "failures": 0,
+              "rps": 0.3177613558982452,
+              "fail_rps": 0.0,
+              "p50_ms": 41.0,
+              "p95_ms": 67.0,
+              "p99_ms": 67.0,
+              "max_ms": 67.41966499976115
+            },
+            "services 15m": {
+              "requests": 102,
+              "failures": 0,
+              "rps": 2.3151184501157864,
+              "fail_rps": 0.0,
+              "p50_ms": 7.0,
+              "p95_ms": 16.0,
+              "p99_ms": 66.0,
+              "max_ms": 66.47811599987108
+            },
+            "services 24h": {
+              "requests": 14,
+              "failures": 0,
+              "rps": 0.3177613558982452,
+              "fail_rps": 0.0,
+              "p50_ms": 29.0,
+              "p95_ms": 100.0,
+              "p99_ms": 100.0,
+              "max_ms": 104.63468799980546
+            },
+            "trace detail": {
+              "requests": 57,
+              "failures": 0,
+              "rps": 1.2937426632999984,
+              "fail_rps": 0.0,
+              "p50_ms": 97.0,
+              "p95_ms": 380.0,
+              "p99_ms": 440.0,
+              "max_ms": 441.5519970002606
+            },
+            "trace search 1h": {
+              "requests": 20,
+              "failures": 0,
+              "rps": 0.45394479414035027,
+              "fail_rps": 0.0,
+              "p50_ms": 21.0,
+              "p95_ms": 63.0,
+              "p99_ms": 63.0,
+              "max_ms": 62.73250899994309
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 5.3,
+          "servscope_rss_max_mb": 86.4,
+          "postgres_cpu_avg": 10.2
+        },
+        {
+          "users": 10,
+          "wall_s": 45.5,
+          "valid": true,
+          "requests": 894,
+          "failures": 0,
+          "rps": 20.293593333393336,
+          "fail_rps": 0.0,
+          "p50_ms": 6.0,
+          "p95_ms": 43.0,
+          "p99_ms": 180.0,
+          "max_ms": 479.06025700012833,
+          "endpoints": {
+            "dependencies 15m": {
+              "requests": 100,
+              "failures": 0,
+              "rps": 2.269976882929903,
+              "fail_rps": 0.0,
+              "p50_ms": 28.0,
+              "p95_ms": 45.0,
+              "p99_ms": 70.0,
+              "max_ms": 69.9125080000158
+            },
+            "failing traces 15m": {
+              "requests": 100,
+              "failures": 0,
+              "rps": 2.269976882929903,
+              "fail_rps": 0.0,
+              "p50_ms": 10.0,
+              "p95_ms": 22.0,
+              "p99_ms": 26.0,
+              "max_ms": 25.670732999969914
+            },
+            "log search 1h": {
+              "requests": 22,
+              "failures": 0,
+              "rps": 0.4993949142445787,
+              "fail_rps": 0.0,
+              "p50_ms": 5.0,
+              "p95_ms": 15.0,
+              "p99_ms": 17.0,
+              "max_ms": 16.67775099986102
+            },
+            "logs of a trace": {
+              "requests": 59,
+              "failures": 0,
+              "rps": 1.339286360928643,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 16.0,
+              "p99_ms": 19.0,
+              "max_ms": 19.056283000281837
+            },
+            "metrics 15m": {
+              "requests": 400,
+              "failures": 0,
+              "rps": 9.079907531719613,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 8.0,
+              "p99_ms": 10.0,
+              "max_ms": 11.176144999808457
+            },
+            "metrics 24h": {
+              "requests": 18,
+              "failures": 0,
+              "rps": 0.4085958389273826,
+              "fail_rps": 0.0,
+              "p50_ms": 41.0,
+              "p95_ms": 62.0,
+              "p99_ms": 62.0,
+              "max_ms": 62.03965300028358
+            },
+            "services 15m": {
+              "requests": 100,
+              "failures": 0,
+              "rps": 2.269976882929903,
+              "fail_rps": 0.0,
+              "p50_ms": 7.0,
+              "p95_ms": 19.0,
+              "p99_ms": 98.0,
+              "max_ms": 97.94788899989726
+            },
+            "services 24h": {
+              "requests": 18,
+              "failures": 0,
+              "rps": 0.4085958389273826,
+              "fail_rps": 0.0,
+              "p50_ms": 29.0,
+              "p95_ms": 51.0,
+              "p99_ms": 51.0,
+              "max_ms": 50.80530299983366
+            },
+            "trace detail": {
+              "requests": 59,
+              "failures": 0,
+              "rps": 1.339286360928643,
+              "fail_rps": 0.0,
+              "p50_ms": 10.0,
+              "p95_ms": 390.0,
+              "p99_ms": 480.0,
+              "max_ms": 479.06025700012833
+            },
+            "trace search 1h": {
+              "requests": 18,
+              "failures": 0,
+              "rps": 0.4085958389273826,
+              "fail_rps": 0.0,
+              "p50_ms": 20.0,
+              "p95_ms": 62.0,
+              "p99_ms": 62.0,
+              "max_ms": 61.95618099991407
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 5.2,
+          "servscope_rss_max_mb": 86.5,
+          "postgres_cpu_avg": 10.4
+        }
+      ]
+    },
+    {
+      "users": 30,
+      "runs": [
+        {
+          "users": 30,
+          "wall_s": 45.6,
+          "valid": true,
+          "requests": 2662,
+          "failures": 0,
+          "rps": 60.65048667382579,
+          "fail_rps": 0.0,
+          "p50_ms": 7.0,
+          "p95_ms": 43.0,
+          "p99_ms": 380.0,
+          "max_ms": 600.6611430002522,
+          "endpoints": {
+            "dependencies 15m": {
+              "requests": 298,
+              "failures": 0,
+              "rps": 6.789573639669453,
+              "fail_rps": 0.0,
+              "p50_ms": 32.0,
+              "p95_ms": 51.0,
+              "p99_ms": 570.0,
+              "max_ms": 581.5160229999492
+            },
+            "failing traces 15m": {
+              "requests": 298,
+              "failures": 0,
+              "rps": 6.789573639669453,
+              "fail_rps": 0.0,
+              "p50_ms": 12.0,
+              "p95_ms": 27.0,
+              "p99_ms": 86.0,
+              "max_ms": 140.2925829997912
+            },
+            "log search 1h": {
+              "requests": 62,
+              "failures": 0,
+              "rps": 1.4125958579178057,
+              "fail_rps": 0.0,
+              "p50_ms": 5.0,
+              "p95_ms": 12.0,
+              "p99_ms": 81.0,
+              "max_ms": 80.83761699981551
+            },
+            "logs of a trace": {
+              "requests": 181,
+              "failures": 0,
+              "rps": 4.123868552953594,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 120.0,
+              "p99_ms": 210.0,
+              "max_ms": 509.4310280001082
+            },
+            "metrics 15m": {
+              "requests": 1192,
+              "failures": 0,
+              "rps": 27.158294558677813,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 12.0,
+              "p99_ms": 19.0,
+              "max_ms": 29.771775999961392
+            },
+            "metrics 24h": {
+              "requests": 47,
+              "failures": 0,
+              "rps": 1.0708387955183367,
+              "fail_rps": 0.0,
+              "p50_ms": 40.0,
+              "p95_ms": 590.0,
+              "p99_ms": 600.0,
+              "max_ms": 600.6611430002522
+            },
+            "services 15m": {
+              "requests": 298,
+              "failures": 0,
+              "rps": 6.789573639669453,
+              "fail_rps": 0.0,
+              "p50_ms": 8.0,
+              "p95_ms": 19.0,
+              "p99_ms": 560.0,
+              "max_ms": 575.2374530002271
+            },
+            "services 24h": {
+              "requests": 47,
+              "failures": 0,
+              "rps": 1.0708387955183367,
+              "fail_rps": 0.0,
+              "p50_ms": 34.0,
+              "p95_ms": 76.0,
+              "p99_ms": 100.0,
+              "max_ms": 103.9247539997632
+            },
+            "trace detail": {
+              "requests": 181,
+              "failures": 0,
+              "rps": 4.123868552953594,
+              "fail_rps": 0.0,
+              "p50_ms": 7.0,
+              "p95_ms": 490.0,
+              "p99_ms": 500.0,
+              "max_ms": 545.5636110000341
+            },
+            "trace search 1h": {
+              "requests": 58,
+              "failures": 0,
+              "rps": 1.3214606412779473,
+              "fail_rps": 0.0,
+              "p50_ms": 23.0,
+              "p95_ms": 75.0,
+              "p99_ms": 570.0,
+              "max_ms": 572.5343500002964
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 14.6,
+          "servscope_rss_max_mb": 87.4,
+          "postgres_cpu_avg": 30.9
+        },
+        {
+          "users": 30,
+          "wall_s": 45.6,
+          "valid": true,
+          "requests": 2808,
+          "failures": 0,
+          "rps": 63.721339211597375,
+          "fail_rps": 0.0,
+          "p50_ms": 8.0,
+          "p95_ms": 48.0,
+          "p99_ms": 200.0,
+          "max_ms": 372.94829699976617,
+          "endpoints": {
+            "dependencies 15m": {
+              "requests": 323,
+              "failures": 0,
+              "rps": 7.329769432103259,
+              "fail_rps": 0.0,
+              "p50_ms": 31.0,
+              "p95_ms": 73.0,
+              "p99_ms": 290.0,
+              "max_ms": 372.94829699976617
+            },
+            "failing traces 15m": {
+              "requests": 322,
+              "failures": 0,
+              "rps": 7.307076647483744,
+              "fail_rps": 0.0,
+              "p50_ms": 12.0,
+              "p95_ms": 42.0,
+              "p99_ms": 160.0,
+              "max_ms": 177.5222080000276
+            },
+            "log search 1h": {
+              "requests": 54,
+              "failures": 0,
+              "rps": 1.2254103694537957,
+              "fail_rps": 0.0,
+              "p50_ms": 5.0,
+              "p95_ms": 20.0,
+              "p99_ms": 47.0,
+              "max_ms": 47.48310900004071
+            },
+            "logs of a trace": {
+              "requests": 160,
+              "failures": 0,
+              "rps": 3.6308455391223573,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 200.0,
+              "p99_ms": 250.0,
+              "max_ms": 258.29180899972926
+            },
+            "metrics 15m": {
+              "requests": 1288,
+              "failures": 0,
+              "rps": 29.228306589934977,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 22.0,
+              "p99_ms": 35.0,
+              "max_ms": 84.35882100002345
+            },
+            "metrics 24h": {
+              "requests": 60,
+              "failures": 0,
+              "rps": 1.361567077170884,
+              "fail_rps": 0.0,
+              "p50_ms": 43.0,
+              "p95_ms": 100.0,
+              "p99_ms": 350.0,
+              "max_ms": 351.86863299986726
+            },
+            "services 15m": {
+              "requests": 325,
+              "failures": 0,
+              "rps": 7.375155001342288,
+              "fail_rps": 0.0,
+              "p50_ms": 8.0,
+              "p95_ms": 52.0,
+              "p99_ms": 140.0,
+              "max_ms": 167.63911999987613
+            },
+            "services 24h": {
+              "requests": 60,
+              "failures": 0,
+              "rps": 1.361567077170884,
+              "fail_rps": 0.0,
+              "p50_ms": 32.0,
+              "p95_ms": 87.0,
+              "p99_ms": 150.0,
+              "max_ms": 150.10177300018768
+            },
+            "trace detail": {
+              "requests": 160,
+              "failures": 0,
+              "rps": 3.6308455391223573,
+              "fail_rps": 0.0,
+              "p50_ms": 6.0,
+              "p95_ms": 120.0,
+              "p99_ms": 200.0,
+              "max_ms": 268.07664299985845
+            },
+            "trace search 1h": {
+              "requests": 56,
+              "failures": 0,
+              "rps": 1.2707959386928251,
+              "fail_rps": 0.0,
+              "p50_ms": 27.0,
+              "p95_ms": 170.0,
+              "p99_ms": 220.0,
+              "max_ms": 224.42783699989377
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 15.2,
+          "servscope_rss_max_mb": 87.4,
+          "postgres_cpu_avg": 32.8
+        },
+        {
+          "users": 30,
+          "wall_s": 45.5,
+          "valid": true,
+          "requests": 2865,
+          "failures": 0,
+          "rps": 65.02201508439335,
+          "fail_rps": 0.0,
+          "p50_ms": 7.0,
+          "p95_ms": 44.0,
+          "p99_ms": 210.0,
+          "max_ms": 407.51949000014065,
+          "endpoints": {
+            "dependencies 15m": {
+              "requests": 337,
+              "failures": 0,
+              "rps": 7.648313816209618,
+              "fail_rps": 0.0,
+              "p50_ms": 30.0,
+              "p95_ms": 150.0,
+              "p99_ms": 320.0,
+              "max_ms": 407.51949000014065
+            },
+            "failing traces 15m": {
+              "requests": 337,
+              "failures": 0,
+              "rps": 7.648313816209618,
+              "fail_rps": 0.0,
+              "p50_ms": 12.0,
+              "p95_ms": 130.0,
+              "p99_ms": 250.0,
+              "max_ms": 277.8258939997613
+            },
+            "log search 1h": {
+              "requests": 53,
+              "failures": 0,
+              "rps": 1.2028505408282189,
+              "fail_rps": 0.0,
+              "p50_ms": 5.0,
+              "p95_ms": 12.0,
+              "p99_ms": 100.0,
+              "max_ms": 104.6559769997657
+            },
+            "logs of a trace": {
+              "requests": 156,
+              "failures": 0,
+              "rps": 3.540465742815135,
+              "fail_rps": 0.0,
+              "p50_ms": 5.0,
+              "p95_ms": 17.0,
+              "p99_ms": 190.0,
+              "max_ms": 206.11251900027128
+            },
+            "metrics 15m": {
+              "requests": 1348,
+              "failures": 0,
+              "rps": 30.593255264838472,
+              "fail_rps": 0.0,
+              "p50_ms": 4.0,
+              "p95_ms": 27.0,
+              "p99_ms": 45.0,
+              "max_ms": 160.9241640003347
+            },
+            "metrics 24h": {
+              "requests": 42,
+              "failures": 0,
+              "rps": 0.9532023153733056,
+              "fail_rps": 0.0,
+              "p50_ms": 42.0,
+              "p95_ms": 61.0,
+              "p99_ms": 300.0,
+              "max_ms": 300.56634199991095
+            },
+            "services 15m": {
+              "requests": 337,
+              "failures": 0,
+              "rps": 7.648313816209618,
+              "fail_rps": 0.0,
+              "p50_ms": 8.0,
+              "p95_ms": 59.0,
+              "p99_ms": 140.0,
+              "max_ms": 225.30721999964953
+            },
+            "services 24h": {
+              "requests": 43,
+              "failures": 0,
+              "rps": 0.9758976085964796,
+              "fail_rps": 0.0,
+              "p50_ms": 32.0,
+              "p95_ms": 45.0,
+              "p99_ms": 140.0,
+              "max_ms": 142.15480499979094
+            },
+            "trace detail": {
+              "requests": 156,
+              "failures": 0,
+              "rps": 3.540465742815135,
+              "fail_rps": 0.0,
+              "p50_ms": 6.0,
+              "p95_ms": 230.0,
+              "p99_ms": 370.0,
+              "max_ms": 369.49275599999964
+            },
+            "trace search 1h": {
+              "requests": 56,
+              "failures": 0,
+              "rps": 1.2709364204977407,
+              "fail_rps": 0.0,
+              "p50_ms": 24.0,
+              "p95_ms": 58.0,
+              "p99_ms": 120.0,
+              "max_ms": 122.19833700009985
+            }
+          },
+          "resource_samples": 44,
+          "servscope_cpu_avg": 15.4,
+          "servscope_rss_max_mb": 87.5,
+          "postgres_cpu_avg": 32.3
+        }
+      ]
+    }
+  ]
+}
