@@ -6,12 +6,19 @@ ServScope collects traces, metrics and logs from a small multi-service app (a de
 a gateway, orders, payments and inventory) and helps a developer find out why requests are
 slow or failing.
 
-> **Status: Milestone 7 of 8.** Alerts and incidents work end to end; ServScope has been
-> broken on purpose and measured against what the design promised
-> ([docs/reliability.md](docs/reliability.md)); and it has been load-tested. One profiled
-> change raised ingest from about 3,400 to about 17,000 spans/s on one CPU core, with export
-> latency at 4 concurrent exports down from 210 to 41 ms (p50). Method, hardware and every
-> number: [docs/performance.md](docs/performance.md).
+> **Status: complete (Milestone 8 of 8).** Alerts and incidents work end to end. ServScope
+> has been broken on purpose and measured against what the design promised
+> ([reliability](docs/reliability.md)), and load-tested: one profiled change raised ingest
+> from about 3,400 to about 17,000 spans/s on one CPU core ([performance](docs/performance.md)).
+
+| Read next | |
+| --- | --- |
+| [Architecture](docs/architecture.md) | Five diagrams: the system, one checkout, ingest, the alert state machine, the data model |
+| [Design decisions](docs/decisions/README.md) | Seven short records: what was chosen, why, and what it cost |
+| [Reliability](docs/reliability.md) | Every failure and threat from the design, its drill or test, and the result |
+| [Performance](docs/performance.md) | Load tests: hardware, method, before and after |
+| [Demo script](docs/demo-script.md) | A 7-minute live demo, outage to root cause to recovery |
+| [Interview pack](docs/interview-pack.md) | The pitch, likely questions with answers, numbers, resume bullets |
 
 ![Overview during an incident](docs/overview.png)
 
@@ -131,7 +138,9 @@ Stop with `docker compose down` (add `--volumes` to delete the stored data).
 
 Both are bound to localhost only. PostgreSQL is not published at all.
 
-## How it fits together (so far)
+## How it fits together
+
+The diagrams are in [docs/architecture.md](docs/architecture.md); in short:
 
 ```
                  +--> inventory   (reserve stock)
@@ -399,6 +408,8 @@ scripts/incident_demo.py  The scripted incident investigation, run in CI
 scripts/failure_drills.py  Breaks the running stack on purpose and checks what happens
 docs/reliability.md  Every failure and threat from the design, its test, and the measured result
 docs/performance.md  Load tests: method, hardware, results before and after the optimisation
+docs/architecture.md, docs/decisions/  Diagrams and design-decision records
+docs/demo-script.md, docs/interview-pack.md  Presenting the project
 perf/                Locust workloads, the benchmark runner, seed data and raw results (JSON)
 ui/                  The dashboard (React + TypeScript + Vite) and its Playwright tests
 tests/               Unit tests (no database) and integration tests (PostgreSQL)
